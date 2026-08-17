@@ -33,7 +33,9 @@ jobs:
             platform: linux
             arch: arm64
             binary: target/release/tempera-android
-          - os: macos-13
+          # macos-13 is retired; macos-15-intel is GitHub's supported x64
+          # macOS image and preserves the release architecture contract.
+          - os: macos-15-intel
             platform: macos
             arch: x64
             binary: target/release/tempera-android
