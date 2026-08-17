@@ -1,4 +1,4 @@
-package dev.jadenfix.androidbridge;
+package dev.tempera.android.bridge;
 
 import android.graphics.Rect;
 import android.view.accessibility.AccessibilityNodeInfo;

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Android Agent Bridge</string>
-    <string name="service_name">Android Agent Bridge</string>
-    <string name="service_description">Local development bridge for the Jadenfix Android simulator computer-use agent.</string>
+    <string name="app_name">Tempera Android Bridge</string>
+    <string name="service_name">Tempera Android Bridge</string>
+    <string name="service_description">Local development bridge for the Tempera Android computer-use engine.</string>
 </resources>

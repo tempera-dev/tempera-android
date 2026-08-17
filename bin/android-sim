@@ -1,4 +1,0 @@
-#!/usr/bin/env python3
-from android_simulator.cli import main
-
-raise SystemExit(main())

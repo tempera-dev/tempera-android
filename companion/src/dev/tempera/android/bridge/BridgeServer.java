@@ -1,4 +1,4 @@
-package dev.jadenfix.androidbridge;
+package dev.tempera.android.bridge;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -21,7 +21,7 @@ import java.util.concurrent.Executors;
 
 final class BridgeServer extends Thread {
     static final int DEVICE_PORT = 6210;
-    static final int PROTOCOL_VERSION = 2;
+    static final int PROTOCOL_VERSION = 3;
     static final int MAX_REQUEST_CHARS = 1_000_000;
     static final int MAX_ACTIONS = 12;
     static final int MAX_RESPONSE_CACHE = 256;
@@ -40,7 +40,7 @@ final class BridgeServer extends Thread {
     private volatile ServerSocket listener;
 
     BridgeServer(BridgeAccessibilityService service) {
-        super("android-agent-bridge");
+        super("tempera-android-bridge");
         setDaemon(true);
         this.service = service;
     }
@@ -153,7 +153,7 @@ final class BridgeServer extends Thread {
         JSONObject result = new JSONObject();
         switch (op) {
             case "health":
-                result.put("service", "android-agent-bridge");
+                result.put("service", "tempera-android-bridge");
                 result.put("protocol", PROTOCOL_VERSION);
                 result.put("server_epoch", epoch);
                 result.put("revision", service.currentRevision());

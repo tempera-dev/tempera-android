@@ -1,4 +1,4 @@
-package dev.jadenfix.androidbridge;
+package dev.tempera.android.bridge;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;

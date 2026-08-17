@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="dev.jadenfix.androidbridge">
+    package="dev.tempera.android.bridge">
 
     <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="36" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -15,7 +15,7 @@
             android:name=".EvalFixtureActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:label="Android Agent Eval" />
+            android:label="Tempera Android Eval" />
         <service
             android:name=".BridgeAccessibilityService"
             android:description="@string/service_description"

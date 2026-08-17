@@ -1,0 +1,30 @@
+name: codeql
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        language: [actions, java, rust]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.language == 'rust' && 'manual' || 'none' }}
+      - uses: dtolnay/rust-toolchain@1.93.1
+        if: matrix.language == 'rust'
+      - run: cargo build --workspace
+        if: matrix.language == 'rust'
+      - uses: github/codeql-action/analyze@v3

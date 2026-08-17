@@ -1,22 +1,15 @@
-# Android Agent Bridge
+# Tempera Android Bridge
 
-This directory contains the optional on-device fast path for `android-agent`.
+This is the optional `dev.tempera.android.bridge` Accessibility companion. It is a local-only performance path, not a general remote-control service.
 
-It is intentionally a very small Android Accessibility service rather than a second application framework. The service exposes semantic UI state and bounded native actions over a loopback-only JSON-lines socket. The host reaches that socket through `adb forward` and authenticates every request with a random per-device token stored in the app-private data directory.
+The host reaches its loopback socket only through `adb forward`. Each request carries a per-device random token, a client id, and the current server epoch. Protocol v3 serializes actions, rejects stale revisions before a batch begins, redacts password values, and caches request receipts to provide at-most-once behavior on retries.
 
-Build it with:
+Build and install it with:
 
 ```bash
 bash scripts/build-companion.sh
+tempera-android --serial emulator-5554 bridge setup
+tempera-android --serial emulator-5554 bridge status --json
 ```
 
-Or install/configure it end-to-end on a running managed emulator with:
-
-```bash
-android-agent bridge setup
-android-agent bridge status
-```
-
-The bridge is optional. `android-agent --transport auto ...` prefers it and falls back to the ADB/UIAutomator controller when the bridge is unavailable. `--transport bridge` makes bridge availability mandatory; `--transport adb` forces the independent fallback path.
-
-The autonomous bridge protocol deliberately does not expose arbitrary shell execution. Human/debug shell access remains a separate `android-sim shell -- ...` surface.
+The `TEMPERA_ANDROID_COMPILE_SDK` variable selects the Android compile surface (default: 36). Physical devices require the owner to manually authorize the Accessibility service. The bridge exposes no arbitrary shell action.

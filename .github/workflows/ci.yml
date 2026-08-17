@@ -3,34 +3,31 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, agent/rust-android-engine]
 
 permissions:
   contents: read
 
 jobs:
-  python:
+  rust:
+    name: rust (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
-        python: ["3.10", "3.13"]
+        os: [ubuntu-latest, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@1.93.1
         with:
-          python-version: ${{ matrix.python }}
-      - run: python -m pip install --no-deps .
-      - run: ./scripts/ci.sh
-
-  shellcheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - run: shellcheck scripts/*.sh
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --release --workspace
 
   companion:
+    name: signed companion APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,9 +35,35 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - uses: android-actions/setup-android@v3
       - name: Install Android compile surface
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - name: Build and verify bridge APK
         run: bash scripts/build-companion.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-bridge
+          path: companion/build/tempera-android-bridge.apk
+
+  emulator-adb-smoke:
+    name: real Linux emulator ADB smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            cargo run --release -p tempera-android -- --serial emulator-5554 --transport adb --json snapshot
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources

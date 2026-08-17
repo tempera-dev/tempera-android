@@ -1,0 +1,12 @@
+{
+  "name": "tempera-android",
+  "version": "0.4.0-alpha.1",
+  "description": "Cross-platform Android computer-use engine for AI agents",
+  "license": "Apache-2.0",
+  "repository": {"type": "git", "url": "git+https://github.com/tempera-dev/tempera-android.git"},
+  "bin": {"tempera-android": "bin/tempera-android.js"},
+  "files": ["bin", "native", "README.md", "LICENSE", "NOTICE", "tempera-android.schema.json"],
+  "engines": {"node": ">=18"},
+  "scripts": {"test": "node --check bin/tempera-android.js"},
+  "keywords": ["android", "adb", "accessibility", "mcp", "agents"]
+}
