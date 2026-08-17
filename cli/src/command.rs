@@ -222,7 +222,12 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         }
         Command::Doctor => {
             let backend = AdbBackend::new(request.serial.unwrap_or_else(|| "unused".to_string()))?;
-            let devices = backend.device_list()?;
+            let adb = match backend.device_list() {
+                Ok(devices) => json!({"available": true, "devices": devices}),
+                Err(error) => {
+                    json!({"available": false, "devices": [], "detail": error.to_string()})
+                }
+            };
             let managed = avd::doctor();
             let configured_appium = config::load()
                 .ok()
@@ -235,7 +240,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                 request.id,
                 json!({
                     "cli": {"version": env!("CARGO_PKG_VERSION"), "schemaVersion": CONTROL_SCHEMA_V1},
-                    "adb": {"available": true, "devices": devices},
+                    "adb": adb,
                     "managedEmulator": managed.ok(),
                     "configuration": {"schemaVersion": config::CONFIG_SCHEMA_V1, "legacyMetadataDetected": config::legacy_metadata_detected(), "legacyMigration": "explicit migration is required; existing AVD data is untouched"},
                     "transports": {"auto": true, "adb": true, "bridge": true, "appium": appium},
