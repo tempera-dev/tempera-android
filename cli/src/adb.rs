@@ -633,6 +633,19 @@ pub(crate) fn validate_sensitive(action: &ActionV1, snapshot: &SnapshotV1) -> Re
     let Some(node) = snapshot.node(selector) else {
         return Ok(());
     };
+    if node.password
+        && matches!(action.kind.as_str(), "type" | "fill")
+        && action
+            .metadata
+            .get("secretResolvedLocally")
+            .map(String::as_str)
+            != Some("true")
+    {
+        return Err(AndroidError::InvalidInput(
+            "Password-field entry requires a locally resolved secretRef; literal values are not accepted in agent actions"
+                .to_string(),
+        ));
+    }
     let sensitive = [
         "send",
         "post",
@@ -724,5 +737,40 @@ mod tests {
     #[test]
     fn text_encoding_keeps_spaces_transport_safe() {
         assert_eq!(encode_input_text("hello world"), "hello%sworld");
+    }
+
+    #[test]
+    fn password_entry_requires_local_secret_resolution() {
+        let nodes = parse_hierarchy(r#"<hierarchy><node text="" class="android.widget.EditText" clickable="true" enabled="true" editable="true" scrollable="false" password="true" bounds="[0,0][1,1]"/></hierarchy>"#).unwrap();
+        let snapshot = SnapshotV1 {
+            schema_version: CONTROL_SCHEMA_V1.to_string(),
+            session_id: "s".to_string(),
+            serial: "e".to_string(),
+            target_kind: "emulator".to_string(),
+            package: String::new(),
+            activity: String::new(),
+            screen: [1, 1],
+            revision: 1,
+            state_hash: "sha256:x".to_string(),
+            captured_at_ms: 0,
+            nodes,
+        };
+        let mut action = ActionV1 {
+            action_id: "a".to_string(),
+            kind: "type".to_string(),
+            selector: Some("@e0".to_string()),
+            text: Some("value".to_string()),
+            key: None,
+            direction: None,
+            coordinates: None,
+            expected_revision: Some(1),
+            expected_state_hash: Some("sha256:x".to_string()),
+            metadata: BTreeMap::new(),
+        };
+        assert!(validate_sensitive(&action, &snapshot).is_err());
+        action
+            .metadata
+            .insert("secretResolvedLocally".to_string(), "true".to_string());
+        assert!(validate_sensitive(&action, &snapshot).is_ok());
     }
 }

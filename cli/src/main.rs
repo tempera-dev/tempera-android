@@ -112,6 +112,17 @@ enum Commands {
     },
     Run {
         task: String,
+        /// OpenAI-compatible model name; may also come from TEMPERA_ANDROID_MODEL.
+        #[arg(long)]
+        model: Option<String>,
+        /// OpenAI-compatible chat-completions endpoint; may come from TEMPERA_ANDROID_ENDPOINT.
+        #[arg(long)]
+        endpoint: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        max_steps: u32,
+        /// Grant an approval only after the user has explicitly authorized consequential UI actions.
+        #[arg(long)]
+        approve_sensitive: bool,
     },
     Bench {
         #[arg(long, default_value_t = 20)]
@@ -629,8 +640,18 @@ fn command_from_cli(command: Commands) -> Command {
             source,
             confirmed: yes,
         },
-        Commands::Run { task: _ } => Command::Unsupported {
-            feature: "run is pending the model-planner port".to_string(),
+        Commands::Run {
+            task,
+            model,
+            endpoint,
+            max_steps,
+            approve_sensitive,
+        } => Command::Run {
+            task,
+            model,
+            endpoint,
+            max_steps,
+            approve_sensitive,
         },
         Commands::Bench { iterations } => Command::Bench { iterations },
         Commands::Eval {
@@ -670,10 +691,7 @@ fn action(
         metadata.insert("approval".to_string(), "granted".to_string());
     }
     ActionV1 {
-        action_id: format!(
-            "cli-{kind}-{}",
-            tempera_android::model::SnapshotV1::now_ms()
-        ),
+        action_id: tempera_android::model::next_action_id(&format!("cli-{kind}")),
         kind: kind.to_string(),
         selector,
         text,

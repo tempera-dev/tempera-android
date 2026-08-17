@@ -17,6 +17,7 @@ tempera-android install --profile google --api 36
 tempera-android device list
 tempera-android --serial emulator-5554 snapshot --json
 tempera-android --serial emulator-5554 find "Continue" --json
+TEMPERA_ANDROID_MODEL=my-model tempera-android --serial emulator-5554 run "Open Settings" --json
 tempera-android --serial emulator-5554 network --json
 tempera-android --serial emulator-5554 location 37.7749 -122.4194 --json
 ```
@@ -35,6 +36,8 @@ tempera-android --serial emulator-5554 snapshot --json
 Every machine response carries `tempera.android.control/v1`. `SnapshotV1` contains a monotonic revision, state hash, screen metadata, and compact semantic `@eN` references. References expire on a changed revision. A fused `batch` requires the same `expectedRevision` and `expectedStateHash` for every action; a stale bridge batch executes nothing.
 
 Consequential targets such as send, post, purchase, transfer, or delete require explicit approval metadata. The bridge redacts password values, is loopback only, authenticates each request with a per-device token, rejects stale epochs, and provides at-most-once request handling. Raw shell is intentionally not an agent/MCP surface.
+
+`run` uses an OpenAI-compatible chat-completions endpoint (`TEMPERA_ANDROID_ENDPOINT`, defaulting to a local endpoint) and requires a model via `--model` or `TEMPERA_ANDROID_MODEL`; the API key is read only from `TEMPERA_ANDROID_API_KEY`. It observes before every action, accepts exactly one revision-bound action per turn, and accepts `done=true` only with current semantic evidence. Planner secret aliases are resolved only from `TEMPERA_ANDROID_SECRET_NAME`, never supplied as CLI arguments or persisted output.
 
 Set `TEMPERA_ANDROID_HOME` to isolate sessions and bridge tokens. The full configuration contract is in [`tempera-android.schema.json`](tempera-android.schema.json). `close` removes only the Tempera session and bridge forwarding; stopping an emulator is always an explicit `device stop` operation.
 

@@ -1,9 +1,22 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CONTROL_SCHEMA_V1: &str = "tempera.android.control/v1";
+
+static ACTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// Process-unique action IDs avoid accidental receipt replay when callers issue
+/// multiple commands in the same millisecond.
+pub fn next_action_id(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}-{}",
+        SnapshotV1::now_ms(),
+        ACTION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

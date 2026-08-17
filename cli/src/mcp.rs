@@ -1,7 +1,7 @@
 //! Stdio MCP server whose tools delegate to the canonical command executor.
 
 use crate::command::{execute, Command, CommandRequest};
-use crate::model::{ActionV1, SnapshotV1};
+use crate::model::{next_action_id, ActionV1};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -101,6 +101,7 @@ fn tools() -> Vec<Value> {
         tool("tempera_android_network", "Read the current Android connectivity diagnostic state.", json!({"type":"object","properties":{}})),
         tool("tempera_android_clipboard", "Read or set the target clipboard. Values are never persisted in snapshots or receipts.", json!({"type":"object","properties":{"text":{"type":"string"}}})),
         tool("tempera_android_state", "Read the persisted latest semantic snapshot and recent action receipts without observing or mutating the target.", json!({"type":"object","properties":{}})),
+        tool("tempera_android_run", "Run a bounded semantic planner loop through the canonical executor. Model credentials are process-local environment only.", json!({"type":"object","required":["task"],"properties":{"task":{"type":"string"},"model":{"type":"string"},"endpoint":{"type":"string"},"maxSteps":{"type":"integer","minimum":1,"maximum":40},"approval":{"type":"string","enum":["granted"]}}})),
         tool("tempera_android_eval", "List deterministic evaluation contracts or grade the current observed state against one contract.", json!({"type":"object","properties":{"list":{"type":"boolean"},"case":{"type":"string"}}})),
         tool("tempera_android_bench", "Measure semantic observation latency without mutating the Android target.", json!({"type":"object","properties":{"iterations":{"type":"integer","minimum":3,"maximum":200}}})),
     ]
@@ -162,11 +163,10 @@ fn command_for_tool(
     appium_url: Option<String>,
     appium_capabilities: Option<Value>,
 ) -> std::result::Result<CommandRequest, String> {
-    let id = format!(
-        "mcp-{}-{}",
-        name.trim_start_matches("tempera_android_"),
-        SnapshotV1::now_ms()
-    );
+    let id = next_action_id(&format!(
+        "mcp-{}",
+        name.trim_start_matches("tempera_android_")
+    ));
     let action = |kind: &str| -> std::result::Result<ActionV1, String> {
         let selector = arguments
             .get("selector")
@@ -271,6 +271,33 @@ fn command_for_tool(
             None => Command::ClipboardGet,
         },
         "tempera_android_state" => Command::State,
+        "tempera_android_run" => {
+            let max_steps = arguments
+                .get("maxSteps")
+                .and_then(Value::as_u64)
+                .unwrap_or(20);
+            if max_steps > 40 {
+                return Err("maxSteps must be 1..=40".to_string());
+            }
+            Command::Run {
+                task: arguments
+                    .get("task")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "task is required".to_string())?
+                    .to_string(),
+                model: arguments
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                endpoint: arguments
+                    .get("endpoint")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                max_steps: max_steps as u32,
+                approve_sensitive: arguments.get("approval").and_then(Value::as_str)
+                    == Some("granted"),
+            }
+        }
         "tempera_android_eval" => Command::Eval {
             list: arguments
                 .get("list")
@@ -326,5 +353,6 @@ mod tests {
         assert!(names.contains(&"tempera_android_bench"));
         assert!(names.contains(&"tempera_android_logs"));
         assert!(names.contains(&"tempera_android_state"));
+        assert!(names.contains(&"tempera_android_run"));
     }
 }

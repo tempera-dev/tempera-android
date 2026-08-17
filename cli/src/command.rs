@@ -7,6 +7,7 @@ use crate::config;
 use crate::error::{AndroidError, Result};
 use crate::evals;
 use crate::model::{ActionReceiptV1, ActionV1, CONTROL_SCHEMA_V1};
+use crate::runner;
 use crate::session::SessionStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -39,6 +40,13 @@ pub enum Command {
     InstallSdk {
         profile: String,
         api: u32,
+    },
+    Run {
+        task: String,
+        model: Option<String>,
+        endpoint: Option<String>,
+        max_steps: u32,
+        approve_sensitive: bool,
     },
     DeviceList,
     DeviceConnect {
@@ -182,6 +190,10 @@ pub fn execute(request: CommandRequest) -> CommandResponse {
 
 fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
     let store = SessionStore::from_environment()?;
+    // Run owns its command payload but recursively invokes the canonical
+    // executor for observations/actions, so retain a credential-free request
+    // envelope for that loop.
+    let runner_request = request.clone();
     match request.command {
         Command::SessionList => return CommandResponse::success(request.id, store.list()?),
         Command::SessionClose => {
@@ -321,6 +333,25 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                 request.id,
                 avd::install_sdk(avd::InstallOptions { profile, api })?,
             )
+        }
+        Command::Run {
+            task,
+            model,
+            endpoint,
+            max_steps,
+            approve_sensitive,
+        } => {
+            let result = runner::run(
+                &runner_request,
+                runner::RunOptions {
+                    task,
+                    model,
+                    endpoint,
+                    max_steps,
+                    approve_sensitive,
+                },
+            )?;
+            return CommandResponse::success(request.id, result);
         }
         Command::Eval {
             list: true,
@@ -593,6 +624,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         }
         Command::Doctor
         | Command::InstallSdk { .. }
+        | Command::Run { .. }
         | Command::DeviceList
         | Command::DeviceConnect { .. }
         | Command::DeviceCreate { .. }
