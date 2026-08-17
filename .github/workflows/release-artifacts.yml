@@ -1,6 +1,13 @@
 name: release artifacts
 
 on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "cli/**"
+      - "bin/**"
+      - ".github/workflows/release-artifacts.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -49,7 +56,7 @@ jobs:
       - run: cargo build --locked --release --workspace
       - uses: actions/upload-artifact@v4
         with:
-          name: tempera-android-${{ inputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
 
@@ -66,6 +73,6 @@ jobs:
       - run: bash scripts/build-companion.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: tempera-android-${{ inputs.version }}-bridge-apk
+          name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-bridge-apk
           path: companion/build/tempera-android-bridge.apk
           if-no-files-found: error
