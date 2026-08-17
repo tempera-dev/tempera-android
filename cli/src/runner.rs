@@ -7,6 +7,7 @@
 use crate::command::{execute, Command, CommandRequest};
 use crate::error::{AndroidError, Result};
 use crate::model::{next_action_id, ActionV1, SnapshotV1};
+use crate::skills::{self, SkillStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -20,6 +21,7 @@ pub struct RunOptions {
     pub endpoint: Option<String>,
     pub max_steps: u32,
     pub approve_sensitive: bool,
+    pub use_skills: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,8 +95,50 @@ pub fn run(request: &CommandRequest, options: RunOptions) -> Result<Value> {
     validate_endpoint(&endpoint)?;
     let mut executed = 0u32;
     let mut history = Vec::<Value>::new();
+    let mut executed_actions = Vec::<ActionV1>::new();
+    let mut initial_snapshot = None::<SnapshotV1>;
+    let skill_store = options
+        .use_skills
+        .then(SkillStore::from_environment)
+        .transpose()?;
     for step in 1..=options.max_steps {
         let snapshot = observe(request)?;
+        initial_snapshot.get_or_insert_with(|| snapshot.clone());
+        if step == 1 {
+            if let Some(store) = &skill_store {
+                for skill in store.candidates(&options.task, &snapshot)? {
+                    let mut current = snapshot.clone();
+                    let mut failed = false;
+                    for stored in &skill.program {
+                        let action = match skills::replay_action(stored, &current) {
+                            Ok(action) => action,
+                            Err(_) => {
+                                failed = true;
+                                break;
+                            }
+                        };
+                        if execute_action(request, action).is_err() {
+                            failed = true;
+                            break;
+                        }
+                        executed += 1;
+                        current = observe(request)?;
+                    }
+                    if !failed && skills::completion_matches(&skill.completion, &current) {
+                        store.record_success(&skill.id)?;
+                        return Ok(json!({
+                            "schemaVersion": "tempera.android.run/v1", "done": true,
+                            "summary": "verified navigation skill replay", "steps": 0,
+                            "actions": executed, "transport": request.transport,
+                            "skill": {"id": skill.id, "replayed": true},
+                            "finalSnapshot": current, "history": history,
+                        }));
+                    }
+                    store.record_failure(&skill.id)?;
+                    history.push(json!({"step": 0, "event": "skill_miss", "skillId": skill.id}));
+                }
+            }
+        }
         let reply = plan(&endpoint, &model, &options.task, &snapshot, &history)?;
         if reply.need_vision {
             return Err(AndroidError::Unsupported(
@@ -103,6 +147,26 @@ pub fn run(request: &CommandRequest, options: RunOptions) -> Result<Value> {
         }
         if reply.done {
             require_evidence(&reply.evidence, &snapshot)?;
+            let learned = if let Some(store) = &skill_store {
+                skills::completion_from_evidence(
+                    &snapshot.package,
+                    &reply.evidence.refs,
+                    &reply.evidence.exact,
+                    &snapshot,
+                )
+                .map(|completion| {
+                    store.learn(
+                        &options.task,
+                        initial_snapshot.as_ref().expect("initial snapshot exists"),
+                        &executed_actions,
+                        completion,
+                    )
+                })
+                .transpose()?
+                .flatten()
+            } else {
+                None
+            };
             return Ok(json!({
                 "schemaVersion": "tempera.android.run/v1",
                 "done": true,
@@ -110,6 +174,7 @@ pub fn run(request: &CommandRequest, options: RunOptions) -> Result<Value> {
                 "steps": step - 1,
                 "actions": executed,
                 "transport": request.transport,
+                "skill": learned.map(|skill| json!({"id": skill.id, "learned": true})),
                 "finalSnapshot": snapshot,
                 "history": history,
             }));
@@ -121,25 +186,9 @@ pub fn run(request: &CommandRequest, options: RunOptions) -> Result<Value> {
             ));
         }
         let action = action_from_plan(&reply.actions[0], &snapshot, options.approve_sensitive)?;
-        let response = execute(CommandRequest {
-            id: next_action_id("run-command"),
-            session_id: request.session_id.clone(),
-            serial: request.serial.clone(),
-            transport: request.transport.clone(),
-            appium_url: request.appium_url.clone(),
-            appium_capabilities: request.appium_capabilities.clone(),
-            command: Command::Action {
-                action: action.clone(),
-            },
-        });
-        if !response.ok {
-            return Err(AndroidError::Backend(
-                response
-                    .error
-                    .unwrap_or_else(|| "planned Android action failed".to_string()),
-            ));
-        }
+        execute_action(request, action.clone())?;
         executed += 1;
+        executed_actions.push(action.clone());
         history.push(json!({
             "step": step,
             "stateHash": snapshot.state_hash,
@@ -158,6 +207,25 @@ pub fn run(request: &CommandRequest, options: RunOptions) -> Result<Value> {
         "finalSnapshot": final_snapshot,
         "history": history,
     }))
+}
+
+fn execute_action(request: &CommandRequest, action: ActionV1) -> Result<()> {
+    let response = execute(CommandRequest {
+        id: next_action_id("run-command"),
+        session_id: request.session_id.clone(),
+        serial: request.serial.clone(),
+        transport: request.transport.clone(),
+        appium_url: request.appium_url.clone(),
+        appium_capabilities: request.appium_capabilities.clone(),
+        command: Command::Action { action },
+    });
+    if response.ok {
+        Ok(())
+    } else {
+        Err(AndroidError::Backend(response.error.unwrap_or_else(|| {
+            "planned Android action failed".to_string()
+        })))
+    }
 }
 
 fn observe(request: &CommandRequest) -> Result<SnapshotV1> {

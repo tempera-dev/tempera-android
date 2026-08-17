@@ -123,6 +123,9 @@ enum Commands {
         /// Grant an approval only after the user has explicitly authorized consequential UI actions.
         #[arg(long)]
         approve_sensitive: bool,
+        /// Enable private replay and learning of verified safe navigation skills.
+        #[arg(long)]
+        skills: bool,
     },
     Bench {
         #[arg(long, default_value_t = 20)]
@@ -646,12 +649,14 @@ fn command_from_cli(command: Commands) -> Command {
             endpoint,
             max_steps,
             approve_sensitive,
+            skills,
         } => Command::Run {
             task,
             model,
             endpoint,
             max_steps,
             approve_sensitive,
+            use_skills: skills,
         },
         Commands::Bench { iterations } => Command::Bench { iterations },
         Commands::Eval {
@@ -663,9 +668,7 @@ fn command_from_cli(command: Commands) -> Command {
             case: case_id,
             output,
         },
-        Commands::Skills => Command::Unsupported {
-            feature: "skills is pending the privacy-bounded cache port".to_string(),
-        },
+        Commands::Skills => Command::SkillsList,
         Commands::Mcp
         | Commands::Daemon { .. }
         | Commands::Dashboard {

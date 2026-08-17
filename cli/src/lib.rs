@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod model;
 pub mod runner;
 pub mod session;
+pub mod skills;
 
 pub use command::{execute, CommandRequest, CommandResponse};
 pub use error::{AndroidError, Result};

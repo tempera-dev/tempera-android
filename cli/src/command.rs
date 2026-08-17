@@ -9,6 +9,7 @@ use crate::evals;
 use crate::model::{ActionReceiptV1, ActionV1, CONTROL_SCHEMA_V1};
 use crate::runner;
 use crate::session::SessionStore;
+use crate::skills::SkillStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -47,6 +48,7 @@ pub enum Command {
         endpoint: Option<String>,
         max_steps: u32,
         approve_sensitive: bool,
+        use_skills: bool,
     },
     DeviceList,
     DeviceConnect {
@@ -126,6 +128,7 @@ pub enum Command {
     SessionList,
     SessionClose,
     State,
+    SkillsList,
     BridgeStatus,
     BridgeSetup {
         #[serde(default)]
@@ -224,6 +227,9 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                     "receipts": store.receipts(&request.session_id)?,
                 }),
             )
+        }
+        Command::SkillsList => {
+            return CommandResponse::success(request.id, SkillStore::from_environment()?.list()?)
         }
         Command::DeviceList => {
             let backend = AdbBackend::new(request.serial.unwrap_or_else(|| "unused".to_string()))?;
@@ -340,6 +346,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             endpoint,
             max_steps,
             approve_sensitive,
+            use_skills,
         } => {
             let result = runner::run(
                 &runner_request,
@@ -349,6 +356,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                     endpoint,
                     max_steps,
                     approve_sensitive,
+                    use_skills,
                 },
             )?;
             return CommandResponse::success(request.id, result);
@@ -635,6 +643,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         | Command::SessionList
         | Command::SessionClose
         | Command::State
+        | Command::SkillsList
         | Command::DashboardStatus
         | Command::Unsupported { .. } => unreachable!(),
     };

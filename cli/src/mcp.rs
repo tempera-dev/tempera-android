@@ -101,7 +101,7 @@ fn tools() -> Vec<Value> {
         tool("tempera_android_network", "Read the current Android connectivity diagnostic state.", json!({"type":"object","properties":{}})),
         tool("tempera_android_clipboard", "Read or set the target clipboard. Values are never persisted in snapshots or receipts.", json!({"type":"object","properties":{"text":{"type":"string"}}})),
         tool("tempera_android_state", "Read the persisted latest semantic snapshot and recent action receipts without observing or mutating the target.", json!({"type":"object","properties":{}})),
-        tool("tempera_android_run", "Run a bounded semantic planner loop through the canonical executor. Model credentials are process-local environment only.", json!({"type":"object","required":["task"],"properties":{"task":{"type":"string"},"model":{"type":"string"},"endpoint":{"type":"string"},"maxSteps":{"type":"integer","minimum":1,"maximum":40},"approval":{"type":"string","enum":["granted"]}}})),
+        tool("tempera_android_run", "Run a bounded semantic planner loop through the canonical executor. Model credentials are process-local environment only.", json!({"type":"object","required":["task"],"properties":{"task":{"type":"string"},"model":{"type":"string"},"endpoint":{"type":"string"},"maxSteps":{"type":"integer","minimum":1,"maximum":40},"skills":{"type":"boolean"},"approval":{"type":"string","enum":["granted"]}}})),
         tool("tempera_android_eval", "List deterministic evaluation contracts or grade the current observed state against one contract.", json!({"type":"object","properties":{"list":{"type":"boolean"},"case":{"type":"string"}}})),
         tool("tempera_android_bench", "Measure semantic observation latency without mutating the Android target.", json!({"type":"object","properties":{"iterations":{"type":"integer","minimum":3,"maximum":200}}})),
     ]
@@ -296,6 +296,10 @@ fn command_for_tool(
                 max_steps: max_steps as u32,
                 approve_sensitive: arguments.get("approval").and_then(Value::as_str)
                     == Some("granted"),
+                use_skills: arguments
+                    .get("skills")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             }
         }
         "tempera_android_eval" => Command::Eval {
