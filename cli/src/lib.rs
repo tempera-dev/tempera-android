@@ -5,6 +5,7 @@
 //! acceleration backend; ADB/UIAutomator remains the independent fallback.
 
 pub mod adb;
+pub mod appium;
 pub mod avd;
 pub mod benchmark;
 pub mod bridge;

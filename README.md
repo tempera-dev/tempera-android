@@ -37,6 +37,8 @@ Set `TEMPERA_ANDROID_HOME` to isolate sessions and bridge tokens. The full confi
 
 `tempera-android.json` in the working directory, or the path named by `TEMPERA_ANDROID_CONFIG`, can set a default serial and transport. Environment variables (`TEMPERA_ANDROID_SERIAL`, `TEMPERA_ANDROID_TRANSPORT`, and `TEMPERA_ANDROID_APPIUM_URL`) override file values. Legacy Android Simulator metadata is detected by `doctor`, never moved automatically.
 
+When an Appium URL is configured, `doctor` performs a bounded HTTPS/HTTP `/status` probe and reports the endpoint health without storing credentials. Appium remains an optional integration backend and is not selected for the native hot path.
+
 ## Native bridge
 
 ```bash

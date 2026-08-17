@@ -1,4 +1,5 @@
 use crate::adb::{self, AdbBackend};
+use crate::appium;
 use crate::avd::{self, CreateOptions, StartOptions};
 use crate::benchmark;
 use crate::bridge;
@@ -223,6 +224,13 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             let backend = AdbBackend::new(request.serial.unwrap_or_else(|| "unused".to_string()))?;
             let devices = backend.device_list()?;
             let managed = avd::doctor();
+            let configured_appium = config::load()
+                .ok()
+                .and_then(|configuration| config::appium_url(&configuration));
+            let appium = configured_appium.as_deref().map(|url| match appium::status(url) {
+                Ok(status) => json!({"configured": true, "reachable": true, "url": url, "status": status}),
+                Err(error) => json!({"configured": true, "reachable": false, "url": url, "detail": error.to_string()}),
+            });
             return CommandResponse::success(
                 request.id,
                 json!({
@@ -230,7 +238,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                     "adb": {"available": true, "devices": devices},
                     "managedEmulator": managed.ok(),
                     "configuration": {"schemaVersion": config::CONFIG_SCHEMA_V1, "legacyMetadataDetected": config::legacy_metadata_detected(), "legacyMigration": "explicit migration is required; existing AVD data is untouched"},
-                    "transports": {"auto": true, "adb": true, "bridge": true, "appium": true},
+                    "transports": {"auto": true, "adb": true, "bridge": true, "appium": appium},
                     "warning": "bridge and Appium are optional integrations; direct ADB/UIAutomator is always independently available"
                 }),
             );
