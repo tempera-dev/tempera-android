@@ -101,6 +101,10 @@ enum Commands {
     },
     Install,
     Upgrade,
+    Migrate {
+        #[command(subcommand)]
+        command: MigrateCommand,
+    },
     Run {
         task: String,
     },
@@ -229,6 +233,18 @@ enum DashboardCommand {
 enum ClipboardCommand {
     Get,
     Set { text: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum MigrateCommand {
+    /// Import one legacy Android Simulator metadata record without moving or changing its AVD.
+    LegacyAvd {
+        name: String,
+        #[arg(long)]
+        source: Option<PathBuf>,
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -602,6 +618,13 @@ fn command_from_cli(command: Commands) -> Command {
         },
         Commands::Upgrade => Command::Unsupported {
             feature: "upgrade is managed by npm, Cargo, Homebrew, or GitHub Releases".to_string(),
+        },
+        Commands::Migrate {
+            command: MigrateCommand::LegacyAvd { name, source, yes },
+        } => Command::MigrateLegacyAvd {
+            name,
+            source,
+            confirmed: yes,
         },
         Commands::Run { task: _ } => Command::Unsupported {
             feature: "run is pending the model-planner port".to_string(),

@@ -181,6 +181,73 @@ pub fn delete(store: &SessionStore, name: &str, confirmed: bool) -> Result<()> {
     Ok(())
 }
 
+/// Copy one historical Android Simulator *metadata record* into the Tempera
+/// managed-device registry. It intentionally does not invoke the SDK, move an
+/// AVD, or modify any Android-owned data. Reset/delete remain separately
+/// confirmed operations after this explicit import.
+pub fn import_legacy(
+    store: &SessionStore,
+    name: &str,
+    legacy_root: &Path,
+    confirmed: bool,
+) -> Result<ManagedAvdV1> {
+    if !confirmed {
+        return Err(AndroidError::InvalidInput(
+            "legacy metadata import is explicit; rerun with --yes after confirming the named AVD"
+                .to_string(),
+        ));
+    }
+    validate_name(name)?;
+    let destination = path_for(store, name);
+    if destination.exists() {
+        return Err(AndroidError::InvalidInput(format!(
+            "{name:?} is already Tempera-managed; refusing to replace its metadata"
+        )));
+    }
+    let source = legacy_root.join("instances").join(format!("{name}.json"));
+    if !source.is_file() {
+        return Err(AndroidError::InvalidInput(format!(
+            "No legacy metadata exists at {}; no Android data was changed",
+            source.display()
+        )));
+    }
+    let raw: serde_json::Value = serde_json::from_slice(&fs::read(&source)?)?;
+    let profile = raw
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| AndroidError::InvalidInput("legacy metadata omitted profile".to_string()))?;
+    let api = raw
+        .get("api")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| {
+            AndroidError::InvalidInput("legacy metadata omitted a valid api".to_string())
+        })?;
+    let device = raw
+        .get("device_profile")
+        .or_else(|| raw.get("device"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("pixel_8")
+        .to_string();
+    let managed = ManagedAvdV1 {
+        name: name.to_string(),
+        profile: normalize_profile(profile)?,
+        api,
+        device,
+        system_image: raw
+            .get("image_package")
+            .or_else(|| raw.get("system_image"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or(system_image(profile, api)?),
+        created_at_ms: SnapshotV1::now_ms(),
+    };
+    save(store, &managed)?;
+    Ok(managed)
+}
+
 pub fn doctor() -> Result<serde_json::Value> {
     let tools = tools()?;
     Ok(serde_json::json!({
@@ -220,12 +287,12 @@ fn path_for(store: &SessionStore, name: &str) -> PathBuf {
 fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 80
-        || !name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
     {
         return Err(AndroidError::InvalidInput(
-            "AVD names may contain only letters, digits, '-' and '_'".to_string(),
+            "AVD names may contain only letters, digits, '.', '-' and '_'".to_string(),
         ));
     }
     Ok(())
@@ -374,5 +441,23 @@ mod tests {
     fn physical_targets_are_never_stopped() {
         assert!(reject_physical("012345", "reset").is_err());
         assert!(reject_physical("emulator-5554", "reset").is_ok());
+    }
+
+    #[test]
+    fn legacy_import_is_explicit_and_never_replaces_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(directory.path().join("tempera")).unwrap();
+        let legacy = directory.path().join("legacy");
+        std::fs::create_dir_all(legacy.join("instances")).unwrap();
+        std::fs::write(
+            legacy.join("instances/demo.avd.json"),
+            r#"{"name":"demo.avd","profile":"google","api":36,"device_profile":"pixel_8","image_package":"system-images;android-36;google_apis;arm64-v8a"}"#,
+        )
+        .unwrap();
+        assert!(import_legacy(&store, "demo.avd", &legacy, false).is_err());
+        let imported = import_legacy(&store, "demo.avd", &legacy, true).unwrap();
+        assert_eq!(imported.name, "demo.avd");
+        assert!(import_legacy(&store, "demo.avd", &legacy, true).is_err());
+        assert!(legacy.join("instances/demo.avd.json").is_file());
     }
 }

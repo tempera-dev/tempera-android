@@ -63,6 +63,11 @@ pub enum Command {
         name: String,
         confirmed: bool,
     },
+    MigrateLegacyAvd {
+        name: String,
+        source: Option<PathBuf>,
+        confirmed: bool,
+    },
     Snapshot {
         full: bool,
     },
@@ -262,6 +267,22 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         Command::DeviceDelete { name, confirmed } => {
             avd::delete(&store, &name, confirmed)?;
             return CommandResponse::success(request.id, json!({"deleted": name}));
+        }
+        Command::MigrateLegacyAvd {
+            name,
+            source,
+            confirmed,
+        } => {
+            let source = source.unwrap_or_else(config::legacy_root);
+            let managed = avd::import_legacy(&store, &name, &source, confirmed)?;
+            return CommandResponse::success(
+                request.id,
+                json!({
+                    "imported": managed,
+                    "source": source,
+                    "avdDataTouched": false,
+                }),
+            );
         }
         Command::Doctor => {
             let backend = AdbBackend::new(request.serial.unwrap_or_else(|| "unused".to_string()))?;
@@ -567,6 +588,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         | Command::DeviceStart { .. }
         | Command::DeviceReset { .. }
         | Command::DeviceDelete { .. }
+        | Command::MigrateLegacyAvd { .. }
         | Command::SessionList
         | Command::SessionClose
         | Command::State

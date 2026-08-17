@@ -93,7 +93,15 @@ pub fn appium_capabilities(config: &ConfigV1) -> Result<Option<Value>> {
 }
 
 pub fn legacy_metadata_detected() -> bool {
-    home().join(".android-simulator").exists()
+    legacy_root().exists()
+}
+
+/// Historical Android Simulator state. The caller must opt in before any
+/// metadata is read or copied; this helper never changes the source tree.
+pub fn legacy_root() -> PathBuf {
+    env::var_os("ANDROID_SIM_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".android-simulator"))
 }
 
 pub fn config_path() -> Option<PathBuf> {
