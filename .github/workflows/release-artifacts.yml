@@ -100,7 +100,11 @@ jobs:
           cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-arm64/tempera-android.exe native/windows-arm64/tempera-android.exe
           chmod +x native/linux-*/tempera-android native/macos-*/tempera-android
       - name: Pack npm package
-        run: npm pack --pack-destination dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          npm pack --pack-destination dist
       - name: Verify package contents and Linux install
         shell: bash
         run: |
@@ -108,8 +112,8 @@ jobs:
           tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz | grep -qx 'package/native/linux-x64/tempera-android'
           tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz | grep -qx 'package/native/macos-arm64/tempera-android'
           tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz | grep -qx 'package/native/windows-x64/tempera-android.exe'
-          npm install --prefix smoke dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz
-          smoke/node_modules/.bin/tempera-android --version
+          npm install --prefix "$PWD/smoke" "$PWD/dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz"
+          "$PWD/smoke/node_modules/.bin/tempera-android" --version
       - uses: actions/upload-artifact@v4
         with:
           name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-npm-package
