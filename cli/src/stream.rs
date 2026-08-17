@@ -25,27 +25,7 @@ pub fn capture(
     validate(observations, interval_ms)?;
     let mut events = Vec::with_capacity(observations as usize);
     for sequence in 0..observations {
-        let response = execute(CommandRequest {
-            id: next_action_id("stream-observe"),
-            session_id: request.session_id.clone(),
-            serial: request.serial.clone(),
-            transport: request.transport.clone(),
-            appium_url: request.appium_url.clone(),
-            appium_capabilities: request.appium_capabilities.clone(),
-            command: Command::Snapshot { full: false },
-        });
-        if !response.ok {
-            return Err(AndroidError::Backend(response.error.unwrap_or_else(|| {
-                "Android observation stream failed".to_string()
-            })));
-        }
-        let snapshot: SnapshotV1 = serde_json::from_value(response.result.unwrap_or(Value::Null))?;
-        events.push(json!({
-            "schemaVersion": STREAM_SCHEMA,
-            "sequence": sequence + 1,
-            "capturedAtMs": snapshot.captured_at_ms,
-            "snapshot": sanitize(snapshot),
-        }));
+        events.push(observe_event(request, sequence + 1)?);
         if sequence + 1 < observations && interval_ms > 0 {
             std::thread::sleep(Duration::from_millis(interval_ms));
         }
@@ -60,6 +40,7 @@ pub fn record(
     interval_ms: u64,
     overwrite: bool,
 ) -> Result<Value> {
+    validate(observations, interval_ms)?;
     if path.is_dir() {
         return Err(AndroidError::InvalidInput(format!(
             "record path {} is a directory",
@@ -79,7 +60,6 @@ pub fn record(
             path.display()
         )));
     }
-    let events = capture(request, observations, interval_ms)?;
     let temporary = path.with_extension("jsonl.tmp");
     if temporary.exists() {
         return Err(AndroidError::InvalidInput(format!(
@@ -87,24 +67,39 @@ pub fn record(
             temporary.display()
         )));
     }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let header = json!({
-        "schemaVersion": RECORD_SCHEMA,
-        "sessionId": request.session_id,
-        "transport": request.transport,
-        "observations": observations,
-        "intervalMs": interval_ms,
-    });
-    serde_json::to_writer(&mut file, &header)?;
-    file.write_all(b"\n")?;
-    for event in &events {
-        serde_json::to_writer(&mut file, event)?;
+    // Recording is intentionally streamed: a 300-frame recording should use
+    // memory proportional to one snapshot, rather than retaining every
+    // semantic tree until the target file is written.
+    let write_result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        let header = json!({
+            "schemaVersion": RECORD_SCHEMA,
+            "sessionId": request.session_id,
+            "transport": request.transport,
+            "observations": observations,
+            "intervalMs": interval_ms,
+        });
+        serde_json::to_writer(&mut file, &header)?;
         file.write_all(b"\n")?;
+        for sequence in 0..observations {
+            serde_json::to_writer(&mut file, &observe_event(request, sequence + 1)?)?;
+            file.write_all(b"\n")?;
+            if sequence + 1 < observations && interval_ms > 0 {
+                std::thread::sleep(Duration::from_millis(interval_ms));
+            }
+        }
+        file.flush()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        // This process created the temporary path. Removing it prevents an
+        // interrupted recording from pinning disk space or blocking a retry.
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
     }
-    file.flush()?;
     if overwrite {
         fs::rename(&temporary, path)?;
     } else {
@@ -117,9 +112,33 @@ pub fn record(
     Ok(json!({
         "schemaVersion": RECORD_SCHEMA,
         "path": path,
-        "events": events.len(),
+        "events": observations,
         "containsScreenshots": false,
         "note": "JSONL semantic trajectory; password node values are redacted and no actions are performed",
+    }))
+}
+
+fn observe_event(request: &CommandRequest, sequence: u32) -> Result<Value> {
+    let response = execute(CommandRequest {
+        id: next_action_id("stream-observe"),
+        session_id: request.session_id.clone(),
+        serial: request.serial.clone(),
+        transport: request.transport.clone(),
+        appium_url: request.appium_url.clone(),
+        appium_capabilities: request.appium_capabilities.clone(),
+        command: Command::Snapshot { full: false },
+    });
+    if !response.ok {
+        return Err(AndroidError::Backend(response.error.unwrap_or_else(|| {
+            "Android observation stream failed".to_string()
+        })));
+    }
+    let snapshot: SnapshotV1 = serde_json::from_value(response.result.unwrap_or(Value::Null))?;
+    Ok(json!({
+        "schemaVersion": STREAM_SCHEMA,
+        "sequence": sequence,
+        "capturedAtMs": snapshot.captured_at_ms,
+        "snapshot": sanitize(snapshot),
     }))
 }
 
