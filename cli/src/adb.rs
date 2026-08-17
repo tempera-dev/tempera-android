@@ -10,6 +10,7 @@ use crate::model::{
 };
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -494,7 +495,7 @@ pub(crate) fn parse_hierarchy(xml: &str) -> Result<Vec<NodeV1>> {
                             .ok()?
                             .to_string();
                         let value = attribute
-                            .decode_and_unescape_value(reader.decoder())
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                             .ok()?
                             .to_string();
                         Some((key, value))
