@@ -111,9 +111,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz | grep -qx 'package/native/linux-x64/tempera-android'
-          tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz | grep -qx 'package/native/macos-arm64/tempera-android'
-          tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz | grep -qx 'package/native/windows-x64/tempera-android.exe'
+          tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz > package-contents.txt
+          grep -qx 'package/native/linux-x64/tempera-android' package-contents.txt
+          grep -qx 'package/native/macos-arm64/tempera-android' package-contents.txt
+          grep -qx 'package/native/windows-x64/tempera-android.exe' package-contents.txt
           npm install --prefix "$PWD/smoke" "$PWD/dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz"
           "$PWD/smoke/node_modules/.bin/tempera-android" --version
       - uses: actions/upload-artifact@v4
