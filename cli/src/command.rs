@@ -343,6 +343,12 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             CommandResponse::success(request.id, json!({"snapshot": snapshot, "nodes": nodes}))?
         }
         Command::Action { action } => {
+            if let Some(receipt) = store.receipt(&session.session_id, &action.action_id)? {
+                return CommandResponse::success(
+                    request.id,
+                    json!({"receipt": receipt, "replayed": true}),
+                );
+            }
             let receipt = if let Some(mut bridge) = bridge_client {
                 session.transport = "bridge".to_string();
                 execute_bridge_actions(&mut bridge, &mut session, &[action])?.remove(0)
@@ -358,6 +364,21 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             if actions.is_empty() || actions.len() > 12 {
                 return Err(AndroidError::InvalidInput(
                     "batch requires 1-12 actions".to_string(),
+                ));
+            }
+            let cached = actions
+                .iter()
+                .map(|action| store.receipt(&session.session_id, &action.action_id))
+                .collect::<Result<Vec<_>>>()?;
+            if cached.iter().all(Option::is_some) {
+                return CommandResponse::success(
+                    request.id,
+                    json!({"receipts": cached.into_iter().flatten().collect::<Vec<_>>(), "session": session, "replayed": true}),
+                );
+            }
+            if cached.iter().any(Option::is_some) {
+                return Err(AndroidError::InvalidInput(
+                    "batch mixes previously completed and new action IDs; use a new batch ID set or inspect stored receipts".to_string(),
                 ));
             }
             let receipts: Vec<ActionReceiptV1> = if let Some(mut bridge) = bridge_client {

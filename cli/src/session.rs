@@ -119,12 +119,20 @@ impl SessionStore {
 
     pub fn save_receipts(&self, session_id: &str, receipts: &[ActionReceiptV1]) -> Result<()> {
         Self::safe_id(session_id)?;
+        let mut combined = self.receipts(session_id)?;
+        for receipt in receipts {
+            combined.retain(|existing| existing.action_id != receipt.action_id);
+            combined.push(receipt.clone());
+        }
+        if combined.len() > 256 {
+            combined.drain(..combined.len() - 256);
+        }
         atomic_json(
             &self
                 .root
                 .join("state")
                 .join(format!("{session_id}.receipts.json")),
-            receipts,
+            &combined,
         )
     }
 
@@ -139,6 +147,13 @@ impl SessionStore {
         } else {
             Ok(Vec::new())
         }
+    }
+
+    pub fn receipt(&self, session_id: &str, action_id: &str) -> Result<Option<ActionReceiptV1>> {
+        Ok(self
+            .receipts(session_id)?
+            .into_iter()
+            .find(|receipt| receipt.action_id == action_id))
     }
 
     pub fn list(&self) -> Result<Vec<SessionV1>> {
@@ -180,4 +195,40 @@ fn atomic_json(path: &Path, value: &(impl serde::Serialize + ?Sized)) -> Result<
     fs::write(&temporary, data)?;
     fs::rename(temporary, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ActionReceiptV1;
+
+    fn receipt(id: &str) -> ActionReceiptV1 {
+        ActionReceiptV1 {
+            schema_version: CONTROL_SCHEMA_V1.to_string(),
+            action_id: id.to_string(),
+            kind: "tap".to_string(),
+            ok: true,
+            transport: "test".to_string(),
+            started_at_ms: 1,
+            completed_at_ms: 2,
+            before_revision: 1,
+            after_revision: 2,
+            before_state_hash: "sha256:a".to_string(),
+            after_state_hash: "sha256:b".to_string(),
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn receipt_cache_replaces_duplicate_action_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(directory.path().to_path_buf()).unwrap();
+        store.save_receipts("session", &[receipt("a")]).unwrap();
+        let mut retry = receipt("a");
+        retry.after_revision = 3;
+        store.save_receipts("session", &[retry]).unwrap();
+        let records = store.receipts("session").unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].after_revision, 3);
+    }
 }
