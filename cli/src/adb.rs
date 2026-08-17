@@ -357,13 +357,24 @@ impl AdbBackend {
     }
 
     fn hierarchy(&self) -> Result<String> {
-        let compact = self.shell(&["uiautomator", "dump", "--compressed", "/dev/tty"])?;
-        if let Some(index) = compact.find("<hierarchy") {
-            return Ok(compact[index..].to_string());
+        // Recent Android images acknowledge `/dev/tty` but do not return the
+        // XML through ADB. Use an ordinary device-side file, then read it in
+        // a separate argv-safe call. `/sdcard` is writable for shell on both
+        // emulators and normally authorized physical ADB targets.
+        const DUMP_PATH: &str = "/sdcard/tempera-android-uiautomator.xml";
+        match self.dump_hierarchy(
+            &["uiautomator", "dump", "--compressed", DUMP_PATH],
+            DUMP_PATH,
+        ) {
+            Ok(hierarchy) => Ok(hierarchy),
+            Err(_) => self.dump_hierarchy(&["uiautomator", "dump", DUMP_PATH], DUMP_PATH),
         }
-        let full = self.shell(&["uiautomator", "dump", "/dev/tty"])?;
-        full.find("<hierarchy")
-            .map(|index| full[index..].to_string())
+    }
+
+    fn dump_hierarchy(&self, dump_command: &[&str], path: &str) -> Result<String> {
+        self.shell(dump_command)?;
+        let dumped = self.shell(&["cat", path])?;
+        extract_hierarchy(&dumped)
             .ok_or_else(|| AndroidError::Backend("Could not read Android UI hierarchy".to_string()))
     }
 
@@ -431,6 +442,12 @@ impl AdbBackend {
         values.extend_from_slice(arguments);
         self.run_global(&values)
     }
+}
+
+fn extract_hierarchy(output: &str) -> Option<String> {
+    output
+        .find("<hierarchy")
+        .map(|index| output[index..].to_string())
 }
 
 fn parse_device_list(output: &str) -> Vec<DeviceInfo> {
@@ -747,6 +764,16 @@ mod tests {
         assert_eq!(nodes[0].label, "Search");
         assert_eq!(nodes[1].text, None);
         assert!(nodes[1].password);
+    }
+
+    #[test]
+    fn extracts_hierarchy_after_uiautomator_status_text() {
+        assert_eq!(
+            extract_hierarchy(
+                "UI hierchary dumped to: /sdcard/window.xml\n<hierarchy><node/></hierarchy>"
+            ),
+            Some("<hierarchy><node/></hierarchy>".to_string())
+        );
     }
 
     #[test]
