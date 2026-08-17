@@ -400,6 +400,9 @@ fn main() {
             "{}",
             serde_json::to_string_pretty(&response).expect("response is serializable")
         );
+        if !response.ok {
+            std::process::exit(command_exit_code(&response));
+        }
     } else if response.ok {
         print_human(&response.result.unwrap_or(serde_json::Value::Null));
     } else {
@@ -410,6 +413,17 @@ fn main() {
                 .unwrap_or_else(|| "Unknown error".to_string())
         );
         std::process::exit(2);
+    }
+}
+
+/// JSON is a transport format, not an acknowledgement of command success.
+/// Emit the structured error to stdout for machine callers, then preserve the
+/// same non-zero process contract used by human-readable commands.
+fn command_exit_code(response: &tempera_android::command::CommandResponse) -> i32 {
+    if response.ok {
+        0
+    } else {
+        2
     }
 }
 
@@ -771,4 +785,19 @@ fn print_human(value: &serde_json::Value) {
         "{}",
         serde_json::to_string_pretty(value).expect("result is serializable")
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempera_android::command::CommandResponse;
+
+    #[test]
+    fn failed_json_response_has_nonzero_exit_code() {
+        let failure = CommandResponse::failure("test".to_string(), "target unavailable");
+        assert_eq!(command_exit_code(&failure), 2);
+
+        let success = CommandResponse::success("test".to_string(), serde_json::json!({})).unwrap();
+        assert_eq!(command_exit_code(&success), 0);
+    }
 }

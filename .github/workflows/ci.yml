@@ -53,9 +53,15 @@ jobs:
   emulator-adb-smoke:
     name: real Linux emulator ADB smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.93.1
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", MODE="0666", GROUP="kvm", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -63,7 +69,13 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
-            cargo run --release -p tempera-android -- --serial emulator-5554 --transport adb --json snapshot
+            adb_path="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}/platform-tools/adb"
+            export TEMPERA_ANDROID_ADB="$adb_path"
+            "$TEMPERA_ANDROID_ADB" -s emulator-5554 wait-for-device
+            while [ "$("$TEMPERA_ANDROID_ADB" -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" != "1" ]; do sleep 1; done
+            response="$(cargo run --release -p tempera-android -- --serial emulator-5554 --transport adb --json snapshot)"
+            printf '%s\n' "$response"
+            printf '%s\n' "$response" | jq -e '.ok == true' >/dev/null
 
   supply-chain:
     runs-on: ubuntu-latest
