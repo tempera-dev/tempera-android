@@ -35,6 +35,10 @@ fn default_transport() -> String {
     "auto".to_string()
 }
 
+fn default_persist_screenshot() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", rename_all = "camelCase")]
 pub enum Command {
@@ -48,6 +52,8 @@ pub enum Command {
         task: String,
         model: Option<String>,
         endpoint: Option<String>,
+        vision_model: Option<String>,
+        vision_endpoint: Option<String>,
         max_steps: u32,
         approve_sensitive: bool,
         use_skills: bool,
@@ -89,6 +95,10 @@ pub enum Command {
     },
     Screenshot {
         path: PathBuf,
+        /// Internal callers such as vision escalation deliberately avoid
+        /// persisting image data in the inspector frame cache.
+        #[serde(default = "default_persist_screenshot")]
+        persist: bool,
     },
     Stream {
         observations: u32,
@@ -390,6 +400,8 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             task,
             model,
             endpoint,
+            vision_model,
+            vision_endpoint,
             max_steps,
             approve_sensitive,
             use_skills,
@@ -400,6 +412,8 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                     task,
                     model: model.clone(),
                     endpoint,
+                    vision_model,
+                    vision_endpoint,
                     max_steps,
                     approve_sensitive,
                     use_skills,
@@ -472,9 +486,11 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             store.save_snapshot(&session.session_id, &snapshot)?;
             CommandResponse::success(request.id, snapshot)?
         }
-        Command::Screenshot { path } => {
+        Command::Screenshot { path, persist } => {
             backend.screenshot(&path)?;
-            store.save_frame(&session.session_id, &path)?;
+            if persist {
+                store.save_frame(&session.session_id, &path)?;
+            }
             CommandResponse::success(request.id, json!({"path": path}))?
         }
         Command::Find { query } => {
@@ -738,9 +754,11 @@ fn execute_appium(request: CommandRequest, store: SessionStore) -> Result<Comman
             let nodes = snapshot.nodes.iter().filter(|node| node.reference == query || node.label.to_lowercase().contains(&normalized) || node.resource_id.as_deref().is_some_and(|id| id.to_lowercase().contains(&normalized))).cloned().collect::<Vec<_>>();
             CommandResponse::success(request.id, json!({"snapshot": snapshot, "nodes": nodes}))?
         }
-        Command::Screenshot { path } => {
+        Command::Screenshot { path, persist } => {
             backend.screenshot(&mut session, &path)?;
-            store.save_frame(&session.session_id, &path)?;
+            if persist {
+                store.save_frame(&session.session_id, &path)?;
+            }
             CommandResponse::success(request.id, json!({"path": path}))?
         }
         Command::Action { action } => {
@@ -958,5 +976,15 @@ mod tests {
             }
         }])
         .is_err());
+    }
+
+    #[test]
+    fn historical_screenshot_commands_still_persist_frames() {
+        let command: Command = serde_json::from_value(json!({
+            "name": "screenshot",
+            "arguments": {"path": "frame.png"}
+        }))
+        .unwrap();
+        assert!(matches!(command, Command::Screenshot { persist: true, .. }));
     }
 }

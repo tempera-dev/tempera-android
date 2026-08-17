@@ -136,6 +136,14 @@ enum Commands {
         /// OpenAI-compatible chat-completions endpoint; may come from TEMPERA_ANDROID_ENDPOINT.
         #[arg(long)]
         endpoint: Option<String>,
+        /// Multimodal model used only after the semantic planner requests vision.
+        /// It may also come from TEMPERA_ANDROID_VISION_MODEL.
+        #[arg(long)]
+        vision_model: Option<String>,
+        /// OpenAI-compatible multimodal endpoint; defaults to --endpoint or
+        /// TEMPERA_ANDROID_ENDPOINT and may come from TEMPERA_ANDROID_VISION_ENDPOINT.
+        #[arg(long)]
+        vision_endpoint: Option<String>,
         #[arg(long, default_value_t = 20)]
         max_steps: u32,
         /// Grant an approval only after the user has explicitly authorized consequential UI actions.
@@ -501,7 +509,10 @@ fn command_from_cli(command: Commands) -> Command {
             command: AppCommand::Permissions { package },
         } => Command::AppPermissions { package },
         Commands::Snapshot { full } => Command::Snapshot { full },
-        Commands::Screenshot { path } => Command::Screenshot { path },
+        Commands::Screenshot { path } => Command::Screenshot {
+            path,
+            persist: true,
+        },
         Commands::Stream {
             observations,
             interval_ms,
@@ -681,6 +692,8 @@ fn command_from_cli(command: Commands) -> Command {
             task,
             model,
             endpoint,
+            vision_model,
+            vision_endpoint,
             max_steps,
             approve_sensitive,
             skills,
@@ -688,6 +701,8 @@ fn command_from_cli(command: Commands) -> Command {
             task,
             model,
             endpoint,
+            vision_model,
+            vision_endpoint,
             max_steps,
             approve_sensitive,
             use_skills: skills,
