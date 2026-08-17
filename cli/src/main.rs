@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tempera_android::command::{execute, Command, CommandRequest};
+use tempera_android::config;
 use tempera_android::daemon;
 use tempera_android::mcp;
 use tempera_android::model::ActionV1;
@@ -243,9 +244,22 @@ struct DirectionActionArgs {
 
 fn main() {
     let cli = Cli::parse();
+    let config = match config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        }
+    };
+    let serial = cli.serial.or_else(|| config::serial(&config));
+    let transport = if cli.transport == "auto" {
+        config::transport(&config).unwrap_or(cli.transport)
+    } else {
+        cli.transport
+    };
     match cli.command {
         Commands::Mcp => {
-            if let Err(error) = mcp::serve(cli.serial, cli.session, cli.transport) {
+            if let Err(error) = mcp::serve(serial, cli.session, transport) {
                 eprintln!("error: {error}");
                 std::process::exit(2);
             }
@@ -275,8 +289,8 @@ fn main() {
     let request = CommandRequest {
         id: "cli".to_string(),
         session_id: cli.session,
-        serial: cli.serial,
-        transport: cli.transport,
+        serial,
+        transport,
         command: command_from_cli(cli.command),
     };
     let response = execute(request);

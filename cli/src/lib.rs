@@ -9,6 +9,7 @@ pub mod avd;
 pub mod benchmark;
 pub mod bridge;
 pub mod command;
+pub mod config;
 pub mod daemon;
 pub mod dashboard;
 pub mod error;

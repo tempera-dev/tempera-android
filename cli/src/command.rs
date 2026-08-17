@@ -2,6 +2,7 @@ use crate::adb::{self, AdbBackend};
 use crate::avd::{self, CreateOptions, StartOptions};
 use crate::benchmark;
 use crate::bridge;
+use crate::config;
 use crate::error::{AndroidError, Result};
 use crate::evals;
 use crate::model::{ActionReceiptV1, ActionV1, CONTROL_SCHEMA_V1};
@@ -228,6 +229,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                     "cli": {"version": env!("CARGO_PKG_VERSION"), "schemaVersion": CONTROL_SCHEMA_V1},
                     "adb": {"available": true, "devices": devices},
                     "managedEmulator": managed.ok(),
+                    "configuration": {"schemaVersion": config::CONFIG_SCHEMA_V1, "legacyMetadataDetected": config::legacy_metadata_detected(), "legacyMigration": "explicit migration is required; existing AVD data is untouched"},
                     "transports": {"auto": true, "adb": true, "bridge": true, "appium": true},
                     "warning": "bridge and Appium are optional integrations; direct ADB/UIAutomator is always independently available"
                 }),

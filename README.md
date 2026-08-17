@@ -35,6 +35,8 @@ Consequential targets such as send, post, purchase, transfer, or delete require 
 
 Set `TEMPERA_ANDROID_HOME` to isolate sessions and bridge tokens. The full configuration contract is in [`tempera-android.schema.json`](tempera-android.schema.json). `close` removes only the Tempera session and bridge forwarding; stopping an emulator is always an explicit `device stop` operation.
 
+`tempera-android.json` in the working directory, or the path named by `TEMPERA_ANDROID_CONFIG`, can set a default serial and transport. Environment variables (`TEMPERA_ANDROID_SERIAL`, `TEMPERA_ANDROID_TRANSPORT`, and `TEMPERA_ANDROID_APPIUM_URL`) override file values. Legacy Android Simulator metadata is detected by `doctor`, never moved automatically.
+
 ## Native bridge
 
 ```bash
