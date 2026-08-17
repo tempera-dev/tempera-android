@@ -1,4 +1,4 @@
-package dev.jadenfix.androidbridge;
+package dev.tempera.android.bridge;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -62,7 +62,7 @@ public final class EvalFixtureActivity extends Activity {
     }
 
     private void showRoot() {
-        LinearLayout page = column("Android Agent Eval");
+        LinearLayout page = column("Tempera Android Eval");
         page.addView(button("Wi-Fi lab", ignored -> showWifi()), matchWrap());
         page.addView(button("Profile lab", ignored -> showProfile()), matchWrap());
         page.addView(button("Dialog lab", ignored -> showDialogLab()), matchWrap());

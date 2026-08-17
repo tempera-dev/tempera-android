@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/companion"
 BUILD="$APP/build"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
-COMPILE_SDK="${ANDROID_AGENT_COMPILE_SDK:-36}"
+COMPILE_SDK="${TEMPERA_ANDROID_COMPILE_SDK:-36}"
 
 if [[ ! -d "$ANDROID_SDK_ROOT" ]]; then
   echo "Android SDK not found at $ANDROID_SDK_ROOT" >&2
@@ -69,8 +69,8 @@ fi
   --java "$BUILD/gen" \
   --min-sdk-version 30 \
   --target-sdk-version "$COMPILE_SDK" \
-  --version-code 3 \
-  --version-name 0.3.0 \
+  --version-code 4 \
+  --version-name 0.4.0-alpha.1 \
   "${resources[@]}"
 
 java_sources=()
@@ -98,13 +98,13 @@ keytool -genkeypair \
   -storepass android \
   -keypass android \
   -alias androiddebugkey \
-  -dname "CN=Android Agent Bridge,O=Jadenfix,C=US" \
+  -dname "CN=Tempera Android Bridge,O=Tempera,C=US" \
   -keyalg RSA \
   -keysize 2048 \
   -validity 10000 \
   >/dev/null 2>&1
 
-OUTPUT="$BUILD/android-agent-bridge.apk"
+OUTPUT="$BUILD/tempera-android-bridge.apk"
 "$APKSIGNER" sign \
   --ks "$KEYSTORE" \
   --ks-pass pass:android \

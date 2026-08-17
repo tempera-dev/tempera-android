@@ -1,62 +1,70 @@
-# Architecture
+# Tempera Android architecture
 
-## Decision: reuse the official emulator engine
+`tempera-android` uses the same product shape as Tempera's browser engine:
 
-This repository deliberately does **not** reimplement Android, QEMU, hardware
-virtualization, Google Play Services, or the Play Store. The official Android
-Emulator already provides the Apple Silicon virtualization path, maintained
-system images, snapshots, ADB integration, graphics, sensors, and networking.
-Rebuilding that stack would increase risk and produce a less phone-like result.
+```text
+CLI / MCP / daemon JSONL
+          │ CommandRequest (versioned)
+          ▼
+session-bound command executor
+          │
+          ├── native Accessibility bridge (preferred, optional)
+          ├── direct ADB + UIAutomator (independent fallback)
+          └── Appium/provider adapter seam (optional integration)
+          ▼
+SnapshotV1 + ActionReceiptV1 + persisted read-only inspector state
+```
 
-The project instead builds the reproducible layer that Android Studio does not
-provide as a portable, reviewable environment:
+There is one canonical public executor. CLI commands, MCP tools, and daemon
+requests construct the same `CommandRequest`; no integration owns a second
+automation semantics.
 
-1. `scripts/bootstrap-macos.sh` installs a pinned class of prerequisites through
-   Homebrew and installs first-party SDK packages into `~/Library/Android/sdk`.
-2. `android_simulator.sdk` resolves a compatible ARM64 system image and installs
-   it through `sdkmanager`.
-3. `android_simulator.avd` creates and records isolated AVDs, configures sane
-   Apple Silicon resource limits, chooses a free console port, and waits for a
-   complete Android boot.
-4. `android_simulator.adb`, `apps`, and `network` expose safe device, app, and
-   network operations.
-5. Host-side metadata under `~/.android-simulator/instances` records the profile
-   and a UUID without pretending that UUID is an Android framework identifier.
+## State and concurrency
 
-## Profiles
+An observation carries a monotonic revision and deterministic semantic state
+hash. Public node references are `@eN` and expire once the revision changes.
+The native bridge maps them to private device references only in host memory.
+The bridge receives the expected revision before dispatching a batch. It
+rejects stale work before invoking any action and then performs a settled
+act-observe transition. ADB remains available when the companion is not
+installed, but it cannot pretend to have bridge-level atomicity.
 
-| Profile | Image tag | Google Play | Google APIs | Root expectation | Intended use |
-|---|---|---:|---:|---:|---|
-| `play` | `google_apis_playstore` | Yes | Yes | No | Consumer-like app use and Play installs |
-| `google` | `google_apis` | No store | Yes | Not promised | Google API development without the store |
-| `aosp` | `default` | No | No | AOSP emulator images can support `adb root` | System/debug work |
+Sessions and inspector records live under `TEMPERA_ANDROID_HOME`, defaulting to
+`~/.tempera-android`. Session closure removes Tempera state only; it never
+stops an attached device.
 
-`play` is the default because it is closest to a normal certified Android phone.
-It intentionally remains locked like a production device.
+## Native bridge boundary
 
-## Identity model
+The Java companion package is `dev.tempera.android.bridge`. It binds on Android
+loopback only. The Rust host creates an `adb forward`, reads a local per-device
+token, negotiates protocol v3 and an epoch, and tears down the forward after
+the request. The companion has no arbitrary shell API. Password fields are
+redacted during observation and blocked from read-modify-write behavior.
 
-Every AVD has a separate writable data partition. A newly created AVD or a
-factory reset receives fresh Android user state. The host-side `instance_uuid`
-is for orchestration only.
+## Targets
 
-Modern `ANDROID_ID` is not one global hardware number. Android scopes it to the
-combination of app-signing key, Android user, and device. Therefore:
+Managed emulators are explicit records, created by the underlying Android SDK
+tools on macOS, Linux, or Windows. A Tempera record is required for reset or
+delete; legacy AVDs are never silently adopted. ADB serials cover local
+emulators, USB devices, wireless devices, and remote connections. Destructive
+emulator operations reject physical serials before sending a command.
 
-- `android-sim identity` reports the value visible to the ADB shell as a
-  diagnostic, not a promise that every app sees that same value.
-- `android-sim new-identity` creates a genuinely separate AVD instead of
-  patching protected settings.
-- `android-sim factory-reset --yes` wipes the AVD and its apps/accounts.
-- The project does not spoof IMEI, build fingerprints, hardware attestation, or
-  Play Integrity results.
+Managed emulator capability depends on upstream images and host acceleration.
+Where that is unavailable, attached and remote ADB targets remain supported.
 
-## Network model
+## Inspector and integrations
 
-The emulator connects outbound through its virtual router and the Mac's current
-network. Recent emulator versions can expose a simulated Wi-Fi access point with
-an explicit SSID and WPA2 password. This is still virtual radio behavior; it
-cannot turn the emulator into a physical participant on the Mac's Wi-Fi LAN.
+The local dashboard is read-only and polls persisted state so it cannot add
+latency or authority to automation. It exposes sessions/devices, a selectable
+semantic tree node, latest receipt history, explicitly captured frame, and the
+latest command-captured logcat/network/model/eval diagnostics. It never asks a
+backend for a screenshot or fresh observation. The optional generic Appium W3C
+adapter translates XML page source, screenshots, and bounded pointer/key
+actions into the same public contract; provider adapters remain behind that
+seam and must source credentials from a local resolver, never checked-in
+configuration.
 
-The CLI also exposes Wi-Fi toggling, latency/speed presets, proxy settings, DNS
-selection at startup, and the emulator's standard `10.0.2.2` host alias.
+`stream` and `record` are observation-only adjuncts: they call the canonical
+snapshot executor on a bounded interval instead of connecting directly to a
+backend. Records are JSONL semantic trajectories with password nodes redacted;
+they contain no screenshots, actions, shell output, or planner secrets.
