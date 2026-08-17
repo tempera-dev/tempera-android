@@ -1,0 +1,71 @@
+name: release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to stamp in the artifact name (for example 0.4.0-alpha.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            binary: target/release/tempera-android
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            binary: target/release/tempera-android
+          - os: macos-13
+            platform: macos
+            arch: x64
+            binary: target/release/tempera-android
+          - os: macos-15
+            platform: macos
+            arch: arm64
+            binary: target/release/tempera-android
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            binary: target/release/tempera-android.exe
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+            binary: target/release/tempera-android.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - run: cargo build --locked --release --workspace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-${{ inputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  companion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: bash scripts/build-companion.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-${{ inputs.version }}-bridge-apk
+          path: companion/build/tempera-android-bridge.apk
+          if-no-files-found: error
