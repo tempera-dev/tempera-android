@@ -3,7 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main, agent/rust-android-engine]
+    branches: [main]
 
 permissions:
   contents: read
