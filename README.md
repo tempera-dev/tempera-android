@@ -6,6 +6,10 @@
 
 Version `0.4.0-alpha.1` is an engineering preview. The Rust unit suite and direct-ADB emulator smoke job are enforced in CI. Real macOS, Windows, and physical-device proof is a release gate, not a claim made by this repository.
 
+## Stable-promotion evidence
+
+The repository contains a manual [self-hosted host-proof workflow](.github/workflows/host-proof.yml) for the remaining release gates. It creates and removes only a uniquely named `tempera-proof-*` managed AVD, or performs a read-only verification of an owner-authorized attached device. Its JSONL artifact records device identity, ADB snapshot evidence, optional bridge health/snapshot evidence, and the managed reset/reboot path. Physical-device bridge proof requires the device owner to enable Accessibility manually.
+
 ## Install and first observation
 
 Build locally with Rust 1.93+:

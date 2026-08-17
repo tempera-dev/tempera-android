@@ -1,0 +1,107 @@
+name: host proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Self-hosted runner operating system
+        required: true
+        type: choice
+        options: [macos, windows]
+      mode:
+        description: managed creates an isolated proof AVD; attached only inspects an owner-authorized target
+        required: true
+        type: choice
+        options: [managed, attached]
+      serial:
+        description: Required for attached proof; leave blank for managed proof
+        required: false
+        type: string
+      require_bridge:
+        description: Require the native bridge. Attached targets must already have manual Accessibility approval.
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    if: inputs.host == 'macos'
+    runs-on: [self-hosted, macos]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - name: Build canonical executable
+        run: cargo build --locked --release -p tempera-android
+      - name: Fetch verified alpha bridge APK
+        if: inputs.require_bridge
+        run: |
+          mkdir -p .proof
+          curl --fail --location --silent --show-error \
+            --output .proof/tempera-android-bridge.apk \
+            https://github.com/tempera-dev/tempera-android/releases/download/v0.4.0-alpha.1/tempera-android-bridge.apk
+          test "$(shasum -a 256 .proof/tempera-android-bridge.apk | awk '{print $1}')" = \
+            45fd018e1a8d51dcb69d89e11e9fed250f9c515ba0c2545b7aee125469aff7c6
+      - name: Capture live host proof
+        env:
+          TEMPERA_ANDROID_BIN: target/release/tempera-android
+          TEMPERA_ANDROID_HOME: ${{ runner.temp }}/tempera-android-proof
+          TEMPERA_PROOF_SESSION: macos-${{ github.run_id }}
+          PROOF_MODE: ${{ inputs.mode }}
+          PROOF_SERIAL: ${{ inputs.serial }}
+          PROOF_REQUIRE_BRIDGE: ${{ inputs.require_bridge }}
+        run: |
+          args=(--mode "$PROOF_MODE")
+          if [[ "$PROOF_MODE" == "managed" ]]; then args+=(--name "tempera-proof-macos-${{ github.run_id }}"); else args+=(--serial "$PROOF_SERIAL"); fi
+          if [[ "$PROOF_REQUIRE_BRIDGE" == "true" ]]; then args+=(--require-bridge --bridge-apk .proof/tempera-android-bridge.apk); fi
+          bash scripts/host-proof.sh "${args[@]}" | tee proof.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-proof-macos-${{ github.run_id }}
+          path: proof.jsonl
+          if-no-files-found: warn
+
+  windows:
+    if: inputs.host == 'windows'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - name: Build canonical executable
+        run: cargo build --locked --release -p tempera-android
+      - name: Fetch verified alpha bridge APK
+        if: inputs.require_bridge
+        run: |
+          mkdir -p .proof
+          curl --fail --location --silent --show-error \
+            --output .proof/tempera-android-bridge.apk \
+            https://github.com/tempera-dev/tempera-android/releases/download/v0.4.0-alpha.1/tempera-android-bridge.apk
+          test "$(sha256sum .proof/tempera-android-bridge.apk | awk '{print $1}')" = \
+            45fd018e1a8d51dcb69d89e11e9fed250f9c515ba0c2545b7aee125469aff7c6
+      - name: Capture live host proof
+        env:
+          TEMPERA_ANDROID_BIN: target/release/tempera-android.exe
+          TEMPERA_ANDROID_HOME: ${{ runner.temp }}/tempera-android-proof
+          TEMPERA_PROOF_SESSION: windows-${{ github.run_id }}
+          PROOF_MODE: ${{ inputs.mode }}
+          PROOF_SERIAL: ${{ inputs.serial }}
+          PROOF_REQUIRE_BRIDGE: ${{ inputs.require_bridge }}
+        run: |
+          args=(--mode "$PROOF_MODE")
+          if [[ "$PROOF_MODE" == "managed" ]]; then args+=(--name "tempera-proof-windows-${{ github.run_id }}"); else args+=(--serial "$PROOF_SERIAL"); fi
+          if [[ "$PROOF_REQUIRE_BRIDGE" == "true" ]]; then args+=(--require-bridge --bridge-apk .proof/tempera-android-bridge.apk); fi
+          bash scripts/host-proof.sh "${args[@]}" | tee proof.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: host-proof-windows-${{ github.run_id }}
+          path: proof.jsonl
+          if-no-files-found: warn

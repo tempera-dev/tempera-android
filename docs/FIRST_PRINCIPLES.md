@@ -83,6 +83,6 @@ That makes ADB a bootstrap/forwarding/fallback transport rather than the per-act
 
 ## Measurement
 
-`android-agent bench` reports observation latency, semantic payload size, sequential control overhead, batched control overhead, and fused act-observe latency. When the native bridge is active it also runs the ADB/UIAutomator baseline and reports relative speedups.
+`tempera-android bench` reports observation latency, semantic payload size, sequential control overhead, batched control overhead, and fused act-observe latency. When the native bridge is active it also runs the ADB/UIAutomator baseline and reports relative speedups.
 
 The benchmark deliberately uses harmless zero-duration waits for control-plane measurements. End-to-end task quality and latency must be measured separately on real app tasks before making an empirical 10x claim.
