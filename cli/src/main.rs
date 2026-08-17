@@ -99,7 +99,12 @@ enum Commands {
         #[command(subcommand)]
         command: ClipboardCommand,
     },
-    Install,
+    Install {
+        #[arg(long, default_value = "google")]
+        profile: String,
+        #[arg(long, default_value_t = 36)]
+        api: u32,
+    },
     Upgrade,
     Migrate {
         #[command(subcommand)]
@@ -613,9 +618,7 @@ fn command_from_cli(command: Commands) -> Command {
         Commands::Clipboard {
             command: ClipboardCommand::Set { text },
         } => Command::ClipboardSet { text },
-        Commands::Install => Command::Unsupported {
-            feature: "install is pending the cross-platform SDK bootstrap port".to_string(),
-        },
+        Commands::Install { profile, api } => Command::InstallSdk { profile, api },
         Commands::Upgrade => Command::Unsupported {
             feature: "upgrade is managed by npm, Cargo, Homebrew, or GitHub Releases".to_string(),
         },

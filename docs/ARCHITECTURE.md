@@ -56,6 +56,7 @@ Where that is unavailable, attached and remote ADB targets remain supported.
 
 The local dashboard is read-only and polls persisted state so it cannot add
 latency or authority to automation. It exposes sessions, latest semantic state,
-and receipts. Future Appium and device-lab providers belong behind the target
-adapter seam and must source credentials from the user's environment or secret
+and receipts. The optional generic Appium W3C adapter translates XML page
+source and bounded pointer/key actions into the same public contract; provider
+adapters remain behind that seam and must source credentials from a local
 resolver, never checked-in configuration.

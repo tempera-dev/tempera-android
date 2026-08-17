@@ -36,6 +36,10 @@ fn default_transport() -> String {
 #[serde(tag = "name", content = "arguments", rename_all = "camelCase")]
 pub enum Command {
     Doctor,
+    InstallSdk {
+        profile: String,
+        api: u32,
+    },
     DeviceList,
     DeviceConnect {
         endpoint: String,
@@ -312,6 +316,12 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                 }),
             );
         }
+        Command::InstallSdk { profile, api } => {
+            return CommandResponse::success(
+                request.id,
+                avd::install_sdk(avd::InstallOptions { profile, api })?,
+            )
+        }
         Command::Eval {
             list: true,
             case: None,
@@ -582,6 +592,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             CommandResponse::success(request.id, report)?
         }
         Command::Doctor
+        | Command::InstallSdk { .. }
         | Command::DeviceList
         | Command::DeviceConnect { .. }
         | Command::DeviceCreate { .. }

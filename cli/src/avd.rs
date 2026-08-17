@@ -41,6 +41,12 @@ pub struct StartOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct InstallOptions {
+    pub profile: String,
+    pub api: u32,
+}
+
+#[derive(Debug, Clone)]
 struct Tools {
     sdk_root: PathBuf,
     sdkmanager: PathBuf,
@@ -95,6 +101,55 @@ pub fn create(store: &SessionStore, options: CreateOptions) -> Result<ManagedAvd
         configure_avd(&managed.name, options.ram_mb, options.data_gb)?;
     }
     Ok(managed)
+}
+
+/// Install the SDK pieces needed by managed emulators. The Android command-line
+/// tools themselves must already be present: fetching an unsigned bootstrap
+/// from an arbitrary URL is deliberately outside this command.
+pub fn install_sdk(options: InstallOptions) -> Result<serde_json::Value> {
+    if !(21..=100).contains(&options.api) {
+        return Err(AndroidError::InvalidInput(
+            "Android API must be 21..=100".to_string(),
+        ));
+    }
+    let profile = normalize_profile(&options.profile)?;
+    let root = sdk_root();
+    let sdkmanager = command_line_tool(&root, "sdkmanager").ok_or_else(|| {
+        AndroidError::Backend(format!(
+            "Required Android SDK command-line tool sdkmanager is missing under {}. Install the official command-line tools first, set ANDROID_SDK_ROOT, then rerun tempera-android install.",
+            root.display()
+        ))
+    })?;
+    let image = system_image(&profile, options.api)?;
+    let packages = vec![
+        "platform-tools".to_string(),
+        "emulator".to_string(),
+        "cmdline-tools;latest".to_string(),
+        format!("platforms;android-{}", options.api),
+        image.clone(),
+    ];
+    let mut command = Command::new(&sdkmanager);
+    command
+        .arg(format!("--sdk_root={}", path(&root)))
+        .args(&packages)
+        .env("ANDROID_SDK_ROOT", &root)
+        .env("ANDROID_HOME", &root)
+        .stdin(Stdio::piped());
+    let mut child = command.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(b"y\ny\ny\n")?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(AndroidError::Backend(command_error(&output)));
+    }
+    Ok(serde_json::json!({
+        "sdkRoot": root,
+        "sdkmanager": sdkmanager,
+        "installedPackages": packages,
+        "systemImage": image,
+    }))
 }
 
 pub fn list(store: &SessionStore) -> Result<Vec<ManagedAvdV1>> {
@@ -323,13 +378,15 @@ fn system_image(profile: &str, api: u32) -> Result<String> {
 }
 
 fn tools() -> Result<Tools> {
-    let root = env::var_os("ANDROID_SDK_ROOT")
-        .or_else(|| env::var_os("ANDROID_HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(default_sdk_root);
-    let tools_root = root.join("cmdline-tools").join("latest").join("bin");
-    let sdkmanager = tools_root.join(executable("sdkmanager"));
-    let avdmanager = tools_root.join(executable("avdmanager"));
+    let root = sdk_root();
+    let sdkmanager = command_line_tool(&root, "sdkmanager").unwrap_or_else(|| {
+        root.join("cmdline-tools/latest/bin")
+            .join(executable("sdkmanager"))
+    });
+    let avdmanager = command_line_tool(&root, "avdmanager").unwrap_or_else(|| {
+        root.join("cmdline-tools/latest/bin")
+            .join(executable("avdmanager"))
+    });
     let emulator = root.join("emulator").join(executable("emulator"));
     for tool in [&sdkmanager, &avdmanager, &emulator] {
         if !tool.is_file() {
@@ -345,6 +402,30 @@ fn tools() -> Result<Tools> {
         avdmanager,
         emulator,
     })
+}
+
+fn sdk_root() -> PathBuf {
+    env::var_os("ANDROID_SDK_ROOT")
+        .or_else(|| env::var_os("ANDROID_HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(default_sdk_root)
+}
+
+fn command_line_tool(root: &Path, name: &str) -> Option<PathBuf> {
+    let executable = executable(name);
+    let latest = root.join("cmdline-tools/latest/bin").join(&executable);
+    if latest.is_file() {
+        return Some(latest);
+    }
+    let directory = root.join("cmdline-tools");
+    let mut candidates = fs::read_dir(directory)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("bin").join(&executable))
+        .filter(|candidate| candidate.is_file())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.pop()
 }
 
 fn default_sdk_root() -> PathBuf {
@@ -459,5 +540,11 @@ mod tests {
         assert_eq!(imported.name, "demo.avd");
         assert!(import_legacy(&store, "demo.avd", &legacy, true).is_err());
         assert!(legacy.join("instances/demo.avd.json").is_file());
+    }
+
+    #[test]
+    fn system_images_follow_the_host_architecture() {
+        let image = system_image("google", 36).unwrap();
+        assert!(image.starts_with("system-images;android-36;google_apis;"));
     }
 }
