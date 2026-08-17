@@ -625,7 +625,10 @@ fn action(
         metadata.insert("approval".to_string(), "granted".to_string());
     }
     ActionV1 {
-        action_id: format!("cli-{kind}"),
+        action_id: format!(
+            "cli-{kind}-{}",
+            tempera_android::model::SnapshotV1::now_ms()
+        ),
         kind: kind.to_string(),
         selector,
         text,

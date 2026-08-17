@@ -1,7 +1,7 @@
 //! Stdio MCP server whose tools delegate to the canonical command executor.
 
 use crate::command::{execute, Command, CommandRequest};
-use crate::model::ActionV1;
+use crate::model::{ActionV1, SnapshotV1};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -128,7 +128,11 @@ fn command_for_tool(
     session_id: String,
     transport: String,
 ) -> std::result::Result<CommandRequest, String> {
-    let id = format!("mcp-{}", name.trim_start_matches("tempera_android_"));
+    let id = format!(
+        "mcp-{}-{}",
+        name.trim_start_matches("tempera_android_"),
+        SnapshotV1::now_ms()
+    );
     let action = |kind: &str| -> std::result::Result<ActionV1, String> {
         let selector = arguments
             .get("selector")
