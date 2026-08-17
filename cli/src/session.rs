@@ -9,6 +9,11 @@ pub struct SessionStore {
     root: PathBuf,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PrivateAppiumSession {
+    session_id: String,
+}
+
 impl SessionStore {
     pub fn from_environment() -> Result<Self> {
         let root = env::var_os("TEMPERA_ANDROID_HOME")
@@ -54,7 +59,14 @@ impl SessionStore {
         if !path.exists() {
             return Ok(None);
         }
-        Ok(Some(serde_json::from_slice(&fs::read(path)?)?))
+        let mut session: SessionV1 = serde_json::from_slice(&fs::read(path)?)?;
+        let private = self.appium_session_path(id)?;
+        if private.is_file() {
+            session.backend_session_id = Some(
+                serde_json::from_slice::<PrivateAppiumSession>(&fs::read(private)?)?.session_id,
+            );
+        }
+        Ok(Some(session))
     }
 
     pub fn get_or_create(&self, id: &str, serial: &str, transport: &str) -> Result<SessionV1> {
@@ -83,6 +95,7 @@ impl SessionStore {
             updated_at_ms: now,
             last_revision: 0,
             last_state_hash: None,
+            backend_session_id: None,
         };
         self.save(&session)?;
         Ok(session)
@@ -90,7 +103,19 @@ impl SessionStore {
 
     pub fn save(&self, session: &SessionV1) -> Result<()> {
         let path = self.path(&session.session_id)?;
-        atomic_json(&path, session)
+        atomic_json(&path, session)?;
+        let private = self.appium_session_path(&session.session_id)?;
+        if let Some(session_id) = &session.backend_session_id {
+            atomic_json(
+                &private,
+                &PrivateAppiumSession {
+                    session_id: session_id.clone(),
+                },
+            )?;
+        } else if private.is_file() {
+            fs::remove_file(private)?;
+        }
+        Ok(())
     }
 
     pub fn save_snapshot(&self, session_id: &str, snapshot: &SnapshotV1) -> Result<()> {
@@ -172,7 +197,7 @@ impl SessionStore {
         let path = self.path(id)?;
         if path.exists() {
             fs::remove_file(path)?;
-            for suffix in ["snapshot", "receipts"] {
+            for suffix in ["snapshot", "receipts", "appium-session"] {
                 let related = self.root.join("state").join(format!("{id}.{suffix}.json"));
                 if related.is_file() {
                     fs::remove_file(related)?;
@@ -186,6 +211,14 @@ impl SessionStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    fn appium_session_path(&self, id: &str) -> Result<PathBuf> {
+        Self::safe_id(id)?;
+        Ok(self
+            .root
+            .join("state")
+            .join(format!("{id}.appium-session.json")))
     }
 }
 
@@ -230,5 +263,26 @@ mod tests {
         let records = store.receipts("session").unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].after_revision, 3);
+    }
+
+    #[test]
+    fn appium_session_is_not_serialized_in_public_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(directory.path().to_path_buf()).unwrap();
+        let mut session = store.get_or_create("session", "appium", "appium").unwrap();
+        session.backend_session_id = Some("private-w3c-session".to_string());
+        store.save(&session).unwrap();
+        let public =
+            std::fs::read_to_string(directory.path().join("sessions/session.json")).unwrap();
+        assert!(!public.contains("private-w3c-session"));
+        assert_eq!(
+            store
+                .load("session")
+                .unwrap()
+                .unwrap()
+                .backend_session_id
+                .as_deref(),
+            Some("private-w3c-session")
+        );
     }
 }

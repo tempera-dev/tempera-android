@@ -321,6 +321,17 @@ impl AdbBackend {
         .map(|_| ())
     }
 
+    /// Read-only inspection; grants and revocations are not part of the
+    /// default agent surface.
+    pub fn app_permissions(&self, package: &str) -> Result<String> {
+        if package.trim().is_empty() || package.chars().any(char::is_whitespace) {
+            return Err(AndroidError::InvalidInput(
+                "package must be a non-empty Android package identifier".to_string(),
+            ));
+        }
+        self.shell(&["dumpsys", "package", package])
+    }
+
     pub fn logs(&self, lines: u32) -> Result<String> {
         self.shell(&["logcat", "-d", "-t", &lines.clamp(1, 2_000).to_string()])
     }
@@ -465,7 +476,7 @@ fn parse_size(value: &str) -> Option<[u32; 2]> {
     Some([width.parse().ok()?, height.parse().ok()?])
 }
 
-fn parse_hierarchy(xml: &str) -> Result<Vec<NodeV1>> {
+pub(crate) fn parse_hierarchy(xml: &str) -> Result<Vec<NodeV1>> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();

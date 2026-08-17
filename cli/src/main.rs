@@ -23,6 +23,9 @@ struct Cli {
     /// auto prefers the native bridge when configured; adb remains the independent fallback.
     #[arg(long, default_value = "auto", value_parser = ["auto", "bridge", "adb", "appium"], global = true)]
     transport: String,
+    /// Generic W3C/Appium endpoint. It may also come from TEMPERA_ANDROID_APPIUM_URL.
+    #[arg(long, global = true)]
+    appium_url: Option<String>,
     /// Emit the versioned JSON response contract.
     #[arg(long, global = true)]
     json: bool,
@@ -182,7 +185,9 @@ enum AppCommand {
     Deeplink {
         uri: String,
     },
-    Permissions,
+    Permissions {
+        package: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -276,9 +281,23 @@ fn main() {
     } else {
         cli.transport
     };
+    let appium_url = cli.appium_url.or_else(|| config::appium_url(&config));
+    let appium_capabilities = match config::appium_capabilities(&config) {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        }
+    };
     match cli.command {
         Commands::Mcp => {
-            if let Err(error) = mcp::serve(serial, cli.session, transport) {
+            if let Err(error) = mcp::serve(
+                serial,
+                cli.session,
+                transport,
+                appium_url,
+                appium_capabilities,
+            ) {
                 eprintln!("error: {error}");
                 std::process::exit(2);
             }
@@ -310,6 +329,8 @@ fn main() {
         session_id: cli.session,
         serial,
         transport,
+        appium_url,
+        appium_capabilities,
         command: command_from_cli(cli.command),
     };
     let response = execute(request);
@@ -424,10 +445,8 @@ fn command_from_cli(command: Commands) -> Command {
             command: AppCommand::Deeplink { uri },
         } => Command::AppDeeplink { uri },
         Commands::App {
-            command: AppCommand::Permissions,
-        } => Command::Unsupported {
-            feature: "app permissions is pending the managed-permissions port".to_string(),
-        },
+            command: AppCommand::Permissions { package },
+        } => Command::AppPermissions { package },
         Commands::Snapshot { full } => Command::Snapshot { full },
         Commands::Screenshot { path } => Command::Screenshot { path },
         Commands::Find { query } => Command::Find { query },

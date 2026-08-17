@@ -8,7 +8,13 @@ use std::io::{self, BufRead, Write};
 
 const PROTOCOL_VERSION: &str = "2025-11-25";
 
-pub fn serve(serial: Option<String>, session_id: String, transport: String) -> io::Result<()> {
+pub fn serve(
+    serial: Option<String>,
+    session_id: String,
+    transport: String,
+    appium_url: Option<String>,
+    appium_capabilities: Option<Value>,
+) -> io::Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     for line in stdin.lock().lines() {
@@ -22,6 +28,8 @@ pub fn serve(serial: Option<String>, session_id: String, transport: String) -> i
                 serial.clone(),
                 session_id.clone(),
                 transport.clone(),
+                appium_url.clone(),
+                appium_capabilities.clone(),
             ),
             Err(parse_error) => Some(error(
                 Value::Null,
@@ -43,6 +51,8 @@ fn handle(
     serial: Option<String>,
     session_id: String,
     transport: String,
+    appium_url: Option<String>,
+    appium_capabilities: Option<Value>,
 ) -> Option<Value> {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let method = request
@@ -62,7 +72,15 @@ fn handle(
         )),
         "ping" => Some(ok(id, json!({}))),
         "tools/list" => Some(ok(id, json!({"tools": tools()}))),
-        "tools/call" => Some(call_tool(id, params, serial, session_id, transport)),
+        "tools/call" => Some(call_tool(
+            id,
+            params,
+            serial,
+            session_id,
+            transport,
+            appium_url,
+            appium_capabilities,
+        )),
         _ => Some(error(id, -32601, format!("Method not found: {method}"))),
     }
 }
@@ -79,6 +97,10 @@ fn tools() -> Vec<Value> {
         tool("tempera_android_apps", "List installed Android application packages.", json!({"type":"object","properties":{"includeSystem":{"type":"boolean"}}})),
         tool("tempera_android_devices", "List attached Android emulators and physical devices.", json!({"type":"object","properties":{}})),
         tool("tempera_android_session", "Inspect or close a Tempera Android session.", json!({"type":"object","properties":{"close":{"type":"boolean"}}})),
+        tool("tempera_android_logs", "Read a bounded logcat tail for the current target.", json!({"type":"object","properties":{"lines":{"type":"integer","minimum":1,"maximum":2000}}})),
+        tool("tempera_android_network", "Read the current Android connectivity diagnostic state.", json!({"type":"object","properties":{}})),
+        tool("tempera_android_clipboard", "Read or set the target clipboard. Values are never persisted in snapshots or receipts.", json!({"type":"object","properties":{"text":{"type":"string"}}})),
+        tool("tempera_android_state", "Read the persisted latest semantic snapshot and recent action receipts without observing or mutating the target.", json!({"type":"object","properties":{}})),
         tool("tempera_android_eval", "List deterministic evaluation contracts or grade the current observed state against one contract.", json!({"type":"object","properties":{"list":{"type":"boolean"},"case":{"type":"string"}}})),
         tool("tempera_android_bench", "Measure semantic observation latency without mutating the Android target.", json!({"type":"object","properties":{"iterations":{"type":"integer","minimum":3,"maximum":200}}})),
     ]
@@ -94,6 +116,8 @@ fn call_tool(
     serial: Option<String>,
     session_id: String,
     transport: String,
+    appium_url: Option<String>,
+    appium_capabilities: Option<Value>,
 ) -> Value {
     let name = params
         .get("name")
@@ -103,7 +127,15 @@ fn call_tool(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let request = match command_for_tool(name, &arguments, serial, session_id, transport) {
+    let request = match command_for_tool(
+        name,
+        &arguments,
+        serial,
+        session_id,
+        transport,
+        appium_url,
+        appium_capabilities,
+    ) {
         Ok(request) => request,
         Err(message) => return error(id, -32602, message),
     };
@@ -127,6 +159,8 @@ fn command_for_tool(
     serial: Option<String>,
     session_id: String,
     transport: String,
+    appium_url: Option<String>,
+    appium_capabilities: Option<Value>,
 ) -> std::result::Result<CommandRequest, String> {
     let id = format!(
         "mcp-{}-{}",
@@ -223,6 +257,20 @@ fn command_for_tool(
             Command::SessionClose
         }
         "tempera_android_session" => Command::SessionList,
+        "tempera_android_logs" => Command::Logs {
+            lines: arguments
+                .get("lines")
+                .and_then(Value::as_u64)
+                .unwrap_or(200) as u32,
+        },
+        "tempera_android_network" => Command::NetworkStatus,
+        "tempera_android_clipboard" => match arguments.get("text").and_then(Value::as_str) {
+            Some(text) => Command::ClipboardSet {
+                text: text.to_string(),
+            },
+            None => Command::ClipboardGet,
+        },
+        "tempera_android_state" => Command::State,
         "tempera_android_eval" => Command::Eval {
             list: arguments
                 .get("list")
@@ -247,6 +295,8 @@ fn command_for_tool(
         session_id,
         serial,
         transport,
+        appium_url,
+        appium_capabilities,
         command,
     })
 }
@@ -274,5 +324,7 @@ mod tests {
         assert!(names.contains(&"tempera_android_find"));
         assert!(names.contains(&"tempera_android_eval"));
         assert!(names.contains(&"tempera_android_bench"));
+        assert!(names.contains(&"tempera_android_logs"));
+        assert!(names.contains(&"tempera_android_state"));
     }
 }

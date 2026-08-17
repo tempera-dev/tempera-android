@@ -2,6 +2,7 @@
 
 use crate::error::{AndroidError, Result};
 use serde::Deserialize;
+use serde_json::Value;
 use std::env;
 use std::path::PathBuf;
 
@@ -24,6 +25,10 @@ pub struct ConfigV1 {
 #[serde(rename_all = "camelCase")]
 pub struct AppiumConfigV1 {
     pub url: Option<String>,
+    /// Non-secret W3C alwaysMatch capabilities. Credentials belong in a
+    /// provider integration or process-local environment, never this file.
+    #[serde(default)]
+    pub capabilities: Option<Value>,
 }
 
 pub fn load() -> Result<ConfigV1> {
@@ -63,6 +68,28 @@ pub fn appium_url(config: &ConfigV1) -> Option<String> {
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| config.appium.as_ref().and_then(|appium| appium.url.clone()))
+}
+
+pub fn appium_capabilities(config: &ConfigV1) -> Result<Option<Value>> {
+    env::var("TEMPERA_ANDROID_APPIUM_CAPABILITIES")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            serde_json::from_str(&value).map_err(|error| {
+                AndroidError::InvalidInput(format!(
+                    "TEMPERA_ANDROID_APPIUM_CAPABILITIES must be valid JSON: {error}"
+                ))
+            })
+        })
+        .transpose()
+        .map(|configured| {
+            configured.or_else(|| {
+                config
+                    .appium
+                    .as_ref()
+                    .and_then(|appium| appium.capabilities.clone())
+            })
+        })
 }
 
 pub fn legacy_metadata_detected() -> bool {

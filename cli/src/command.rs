@@ -21,6 +21,10 @@ pub struct CommandRequest {
     pub serial: Option<String>,
     #[serde(default = "default_transport")]
     pub transport: String,
+    #[serde(default)]
+    pub appium_url: Option<String>,
+    #[serde(default)]
+    pub appium_capabilities: Option<Value>,
     pub command: Command,
 }
 
@@ -87,6 +91,9 @@ pub enum Command {
     AppDeeplink {
         uri: String,
     },
+    AppPermissions {
+        package: String,
+    },
     Logs {
         lines: u32,
     },
@@ -101,6 +108,7 @@ pub enum Command {
     },
     SessionList,
     SessionClose,
+    State,
     BridgeStatus,
     BridgeSetup {
         #[serde(default)]
@@ -168,9 +176,32 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
     match request.command {
         Command::SessionList => return CommandResponse::success(request.id, store.list()?),
         Command::SessionClose => {
+            if request.transport == "appium" {
+                if let Some(mut session) = store.load(&request.session_id)? {
+                    if let Some(url) = request.appium_url.as_deref() {
+                        let backend = appium::AppiumBackend::new(url, request.appium_capabilities)?;
+                        let closed_remote = backend.close(&mut session)?;
+                        store.save(&session)?;
+                        return CommandResponse::success(
+                            request.id,
+                            json!({"closed": store.remove(&request.session_id)?, "closedRemote": closed_remote}),
+                        );
+                    }
+                }
+            }
             return CommandResponse::success(
                 request.id,
                 json!({"closed": store.remove(&request.session_id)?}),
+            );
+        }
+        Command::State => {
+            return CommandResponse::success(
+                request.id,
+                json!({
+                    "session": store.load(&request.session_id)?,
+                    "snapshot": store.snapshot(&request.session_id)?,
+                    "receipts": store.receipts(&request.session_id)?,
+                }),
             )
         }
         Command::DeviceList => {
@@ -277,6 +308,10 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             )))
         }
         _ => {}
+    }
+
+    if request.transport == "appium" {
+        return execute_appium(request, store);
     }
 
     let serial = resolve_serial(request.serial.as_deref())?;
@@ -419,6 +454,10 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             backend.app_deeplink(&uri)?;
             CommandResponse::success(request.id, json!({"uri": uri}))?
         }
+        Command::AppPermissions { package } => CommandResponse::success(
+            request.id,
+            json!({"package": package, "raw": backend.app_permissions(&package)?}),
+        )?,
         Command::Logs { lines } => {
             CommandResponse::success(request.id, json!({"logcat": backend.logs(lines)?}))?
         }
@@ -530,9 +569,72 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         | Command::DeviceDelete { .. }
         | Command::SessionList
         | Command::SessionClose
+        | Command::State
         | Command::DashboardStatus
         | Command::Unsupported { .. } => unreachable!(),
     };
+    Ok(response)
+}
+
+fn execute_appium(request: CommandRequest, store: SessionStore) -> Result<CommandResponse> {
+    let url = request.appium_url.as_deref().ok_or_else(|| AndroidError::InvalidInput(
+        "--transport appium requires --appium-url, TEMPERA_ANDROID_APPIUM_URL, or appium.url in tempera-android.json".to_string(),
+    ))?;
+    let serial = resolve_serial(request.serial.as_deref()).unwrap_or_else(|_| "appium".to_string());
+    let backend = appium::AppiumBackend::new(url, request.appium_capabilities.clone())?;
+    let mut session = store.get_or_create(&request.session_id, &serial, "appium")?;
+    session.transport = "appium".to_string();
+    let response = match request.command {
+        Command::Snapshot { .. } => {
+            let snapshot = backend.observe(&mut session)?;
+            store.save_snapshot(&session.session_id, &snapshot)?;
+            CommandResponse::success(request.id, snapshot)?
+        }
+        Command::Find { query } => {
+            let snapshot = backend.observe(&mut session)?;
+            store.save_snapshot(&session.session_id, &snapshot)?;
+            let normalized = query.to_lowercase();
+            let nodes = snapshot.nodes.iter().filter(|node| node.reference == query || node.label.to_lowercase().contains(&normalized) || node.resource_id.as_deref().is_some_and(|id| id.to_lowercase().contains(&normalized))).cloned().collect::<Vec<_>>();
+            CommandResponse::success(request.id, json!({"snapshot": snapshot, "nodes": nodes}))?
+        }
+        Command::Action { action } => {
+            if let Some(receipt) = store.receipt(&session.session_id, &action.action_id)? {
+                return CommandResponse::success(request.id, json!({"receipt": receipt, "replayed": true}));
+            }
+            let receipt = backend.execute_action(&mut session, &action)?;
+            store.save_receipts(&session.session_id, std::slice::from_ref(&receipt))?;
+            CommandResponse::success(request.id, receipt)?
+        }
+        Command::Batch { actions } => {
+            if actions.is_empty() || actions.len() > 12 { return Err(AndroidError::InvalidInput("batch requires 1-12 actions".to_string())); }
+            require_fused_batch_guards(&actions)?;
+            let cached = actions.iter().map(|action| store.receipt(&session.session_id, &action.action_id)).collect::<Result<Vec<_>>>()?;
+            if cached.iter().all(Option::is_some) { return CommandResponse::success(request.id, json!({"receipts": cached.into_iter().flatten().collect::<Vec<_>>(), "session": session, "replayed": true})); }
+            if cached.iter().any(Option::is_some) { return Err(AndroidError::InvalidInput("batch mixes previously completed and new action IDs; use a new batch ID set or inspect stored receipts".to_string())); }
+            let mut receipts = Vec::with_capacity(actions.len());
+            for action in &actions { receipts.push(backend.execute_action(&mut session, action)?); }
+            store.save_receipts(&session.session_id, &receipts)?;
+            CommandResponse::success(request.id, json!({"receipts": receipts, "session": session}))?
+        }
+        Command::Bench { iterations } => {
+            if !(3..=200).contains(&iterations) { return Err(AndroidError::InvalidInput("bench iterations must be 3..=200".to_string())); }
+            let mut observation_ms = Vec::with_capacity(iterations as usize);
+            let mut payload_bytes = Vec::with_capacity(iterations as usize);
+            for _ in 0..iterations { let started = std::time::Instant::now(); let snapshot = backend.observe(&mut session)?; observation_ms.push(started.elapsed().as_secs_f64() * 1000.0); payload_bytes.push(serde_json::to_vec(&snapshot)?.len()); }
+            CommandResponse::success(request.id, json!({"schemaVersion": "tempera.android.benchmark/v1", "iterations": iterations, "transport": "appium-w3c", "observation": benchmark::summarize(&observation_ms), "semanticPayloadBytes": {"mean": payload_bytes.iter().sum::<usize>() as f64 / payload_bytes.len() as f64, "min": payload_bytes.iter().min(), "max": payload_bytes.iter().max()}, "note": "Observation-only measurement. Compare transports on the same target and publish raw reports before making performance claims."}))?
+        }
+        Command::Eval { list: false, case, output } => {
+            let case = case.ok_or_else(|| AndroidError::InvalidInput("eval requires --case CASE_ID or --list".to_string()))?;
+            let snapshot = backend.observe(&mut session)?;
+            store.save_snapshot(&session.session_id, &snapshot)?;
+            let definition = evals::case(&case).ok_or_else(|| AndroidError::InvalidInput(format!("Unknown eval case {case:?}; use eval --list")))?;
+            let report = evals::evaluate(definition, &snapshot);
+            if let Some(output) = output { std::fs::write(&output, serde_json::to_vec_pretty(&report)?)?; }
+            CommandResponse::success(request.id, report)?
+        }
+        other => return Err(AndroidError::Unsupported(format!("Appium transport does not support {other:?}; use ADB for device and app administration"))),
+    };
+    store.save(&session)?;
     Ok(response)
 }
 
@@ -545,10 +647,7 @@ fn select_bridge(
         "adb" => Ok(None),
         "bridge" => Ok(Some(bridge::BridgeClient::connect(serial, store)?)),
         "auto" => Ok(bridge::BridgeClient::connect(serial, store).ok()),
-        "appium" => Err(AndroidError::Unsupported(
-            "Appium endpoint selection requires --appium-url and is not enabled in this alpha build"
-                .to_string(),
-        )),
+        "appium" => Ok(None),
         other => Err(AndroidError::InvalidInput(format!(
             "Unknown transport {other:?}; use auto, bridge, adb, or appium"
         ))),

@@ -153,4 +153,8 @@ pub struct SessionV1 {
     pub last_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_state_hash: Option<String>,
+    /// Private W3C/Appium session identifier. SessionStore writes it to an
+    /// internal sidecar, never to the public SessionV1 response.
+    #[serde(default, skip_serializing)]
+    pub backend_session_id: Option<String>,
 }
