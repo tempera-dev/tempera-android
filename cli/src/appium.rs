@@ -7,6 +7,7 @@
 use crate::adb::{self, validate_guard, validate_sensitive};
 use crate::error::{AndroidError, Result};
 use crate::model::{ActionReceiptV1, ActionV1, SessionV1, SnapshotV1, CONTROL_SCHEMA_V1};
+use base64::Engine;
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -167,6 +168,24 @@ impl AppiumBackend {
             after_state_hash: after.state_hash,
             detail: None,
         })
+    }
+
+    pub fn screenshot(&self, session: &mut SessionV1, path: &std::path::Path) -> Result<()> {
+        let id = self.ensure_session(session)?;
+        let encoded = self
+            .value(self.get(&format!("/session/{id}/screenshot"))?)?
+            .as_str()
+            .ok_or_else(|| {
+                AndroidError::Backend("Appium screenshot was not base64 text".to_string())
+            })?
+            .to_string();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| {
+                AndroidError::Backend(format!("Appium screenshot base64 was invalid: {error}"))
+            })?;
+        std::fs::write(path, bytes)?;
+        Ok(())
     }
 
     pub fn close(&self, session: &mut SessionV1) -> Result<bool> {

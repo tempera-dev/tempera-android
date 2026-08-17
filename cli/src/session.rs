@@ -1,5 +1,6 @@
 use crate::error::{AndroidError, Result};
 use crate::model::{ActionReceiptV1, SessionV1, SnapshotV1, CONTROL_SCHEMA_V1};
+use serde_json::Value;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -181,6 +182,61 @@ impl SessionStore {
             .find(|receipt| receipt.action_id == action_id))
     }
 
+    /// Persist a bounded diagnostic explicitly produced by a control command.
+    /// The dashboard only reads this cache; it never invokes target diagnostics.
+    pub fn save_diagnostic(&self, session_id: &str, name: &str, value: &Value) -> Result<()> {
+        let path = self.diagnostic_path(session_id, name)?;
+        atomic_json(&path, value)
+    }
+
+    pub fn diagnostic(&self, session_id: &str, name: &str) -> Result<Option<Value>> {
+        let path = self.diagnostic_path(session_id, name)?;
+        if path.is_file() {
+            Ok(Some(serde_json::from_slice(&fs::read(path)?)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn append_activity(&self, session_id: &str, entry: Value) -> Result<()> {
+        let mut activity = self
+            .diagnostic(session_id, "activity")?
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default();
+        activity.push(entry);
+        if activity.len() > 50 {
+            activity.drain(..activity.len() - 50);
+        }
+        self.save_diagnostic(session_id, "activity", &Value::Array(activity))
+    }
+
+    /// Copy a command-captured PNG to a fixed, session-owned location for the
+    /// inspector. The web server never accepts a filesystem path from a request.
+    pub fn save_frame(&self, session_id: &str, source: &Path) -> Result<()> {
+        Self::safe_id(session_id)?;
+        let metadata = fs::metadata(source)?;
+        if metadata.len() > 20 * 1024 * 1024 {
+            return Err(AndroidError::InvalidInput(
+                "screenshot is larger than the 20 MiB inspector frame limit".to_string(),
+            ));
+        }
+        fs::copy(source, self.frame_path(session_id)?)?;
+        Ok(())
+    }
+
+    pub fn frame(&self, session_id: &str) -> Result<Option<Vec<u8>>> {
+        let path = self.frame_path(session_id)?;
+        if path.is_file() {
+            Ok(Some(fs::read(path)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn has_frame(&self, session_id: &str) -> Result<bool> {
+        Ok(self.frame_path(session_id)?.is_file())
+    }
+
     pub fn list(&self) -> Result<Vec<SessionV1>> {
         let mut sessions: Vec<SessionV1> = Vec::new();
         for entry in fs::read_dir(self.root.join("sessions"))? {
@@ -197,11 +253,22 @@ impl SessionStore {
         let path = self.path(id)?;
         if path.exists() {
             fs::remove_file(path)?;
-            for suffix in ["snapshot", "receipts", "appium-session"] {
+            for suffix in [
+                "snapshot",
+                "receipts",
+                "appium-session",
+                "logs",
+                "network",
+                "activity",
+            ] {
                 let related = self.root.join("state").join(format!("{id}.{suffix}.json"));
                 if related.is_file() {
                     fs::remove_file(related)?;
                 }
+            }
+            let frame = self.frame_path(id)?;
+            if frame.is_file() {
+                fs::remove_file(frame)?;
             }
             Ok(true)
         } else {
@@ -219,6 +286,23 @@ impl SessionStore {
             .root
             .join("state")
             .join(format!("{id}.appium-session.json")))
+    }
+
+    fn diagnostic_path(&self, id: &str, name: &str) -> Result<PathBuf> {
+        Self::safe_id(id)?;
+        if !matches!(name, "logs" | "network" | "activity") {
+            return Err(AndroidError::InvalidInput(
+                "unsupported persisted diagnostic".to_string(),
+            ));
+        }
+        Ok(self.root.join("state").join(format!("{id}.{name}.json")))
+    }
+
+    fn frame_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self
+            .root
+            .join("state")
+            .join(format!("{}.frame.png", Self::safe_id(id)?)))
     }
 }
 
@@ -284,5 +368,36 @@ mod tests {
                 .as_deref(),
             Some("private-w3c-session")
         );
+    }
+
+    #[test]
+    fn inspector_diagnostics_are_bounded_and_removed_with_the_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(directory.path().to_path_buf()).unwrap();
+        store
+            .get_or_create("session", "emulator-5554", "adb")
+            .unwrap();
+        store
+            .save_diagnostic("session", "network", &serde_json::json!({"state":"ok"}))
+            .unwrap();
+        store
+            .append_activity("session", serde_json::json!({"kind":"eval"}))
+            .unwrap();
+        assert_eq!(
+            store.diagnostic("session", "network").unwrap().unwrap()["state"],
+            "ok"
+        );
+        assert_eq!(
+            store
+                .diagnostic("session", "activity")
+                .unwrap()
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store.remove("session").unwrap());
+        assert!(store.diagnostic("session", "network").unwrap().is_none());
     }
 }

@@ -55,11 +55,14 @@ Where that is unavailable, attached and remote ADB targets remain supported.
 ## Inspector and integrations
 
 The local dashboard is read-only and polls persisted state so it cannot add
-latency or authority to automation. It exposes sessions, latest semantic state,
-and receipts. The optional generic Appium W3C adapter translates XML page
-source and bounded pointer/key actions into the same public contract; provider
-adapters remain behind that seam and must source credentials from a local
-resolver, never checked-in configuration.
+latency or authority to automation. It exposes sessions/devices, a selectable
+semantic tree node, latest receipt history, explicitly captured frame, and the
+latest command-captured logcat/network/model/eval diagnostics. It never asks a
+backend for a screenshot or fresh observation. The optional generic Appium W3C
+adapter translates XML page source, screenshots, and bounded pointer/key
+actions into the same public contract; provider adapters remain behind that
+seam and must source credentials from a local resolver, never checked-in
+configuration.
 
 `stream` and `record` are observation-only adjuncts: they call the canonical
 snapshot executor on a bounded interval instead of connecting directly to a

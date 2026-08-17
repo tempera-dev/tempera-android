@@ -398,12 +398,21 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                 &runner_request,
                 runner::RunOptions {
                     task,
-                    model,
+                    model: model.clone(),
                     endpoint,
                     max_steps,
                     approve_sensitive,
                     use_skills,
                 },
+            )?;
+            store.append_activity(
+                &request.session_id,
+                json!({
+                    "kind": "model-run",
+                    "capturedAtMs": crate::model::SnapshotV1::now_ms(),
+                    "model": model,
+                    "result": result.clone(),
+                }),
             )?;
             return CommandResponse::success(request.id, result);
         }
@@ -465,6 +474,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         }
         Command::Screenshot { path } => {
             backend.screenshot(&path)?;
+            store.save_frame(&session.session_id, &path)?;
             CommandResponse::success(request.id, json!({"path": path}))?
         }
         Command::Find { query } => {
@@ -575,10 +585,14 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             json!({"package": package, "raw": backend.app_permissions(&package)?}),
         )?,
         Command::Logs { lines } => {
-            CommandResponse::success(request.id, json!({"logcat": backend.logs(lines)?}))?
+            let result = json!({"capturedAtMs": crate::model::SnapshotV1::now_ms(), "logcat": backend.logs(lines)?});
+            store.save_diagnostic(&session.session_id, "logs", &result)?;
+            CommandResponse::success(request.id, result)?
         }
         Command::NetworkStatus => {
-            CommandResponse::success(request.id, json!({"state": backend.network_status()?}))?
+            let result = json!({"capturedAtMs": crate::model::SnapshotV1::now_ms(), "state": backend.network_status()?});
+            store.save_diagnostic(&session.session_id, "network", &result)?;
+            CommandResponse::success(request.id, result)?
         }
         Command::LocationSet {
             latitude,
@@ -674,6 +688,10 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
             if let Some(output) = output {
                 std::fs::write(&output, serde_json::to_vec_pretty(&report)?)?;
             }
+            store.append_activity(
+                &session.session_id,
+                json!({"kind": "eval", "capturedAtMs": crate::model::SnapshotV1::now_ms(), "report": report.clone()}),
+            )?;
             CommandResponse::success(request.id, report)?
         }
         Command::Doctor
@@ -720,6 +738,11 @@ fn execute_appium(request: CommandRequest, store: SessionStore) -> Result<Comman
             let nodes = snapshot.nodes.iter().filter(|node| node.reference == query || node.label.to_lowercase().contains(&normalized) || node.resource_id.as_deref().is_some_and(|id| id.to_lowercase().contains(&normalized))).cloned().collect::<Vec<_>>();
             CommandResponse::success(request.id, json!({"snapshot": snapshot, "nodes": nodes}))?
         }
+        Command::Screenshot { path } => {
+            backend.screenshot(&mut session, &path)?;
+            store.save_frame(&session.session_id, &path)?;
+            CommandResponse::success(request.id, json!({"path": path}))?
+        }
         Command::Action { action } => {
             if let Some(receipt) = store.receipt(&session.session_id, &action.action_id)? {
                 return CommandResponse::success(request.id, json!({"receipt": receipt, "replayed": true}));
@@ -753,6 +776,7 @@ fn execute_appium(request: CommandRequest, store: SessionStore) -> Result<Comman
             let definition = evals::case(&case).ok_or_else(|| AndroidError::InvalidInput(format!("Unknown eval case {case:?}; use eval --list")))?;
             let report = evals::evaluate(definition, &snapshot);
             if let Some(output) = output { std::fs::write(&output, serde_json::to_vec_pretty(&report)?)?; }
+            store.append_activity(&session.session_id, json!({"kind": "eval", "capturedAtMs": crate::model::SnapshotV1::now_ms(), "report": report.clone()}))?;
             CommandResponse::success(request.id, report)?
         }
         other => return Err(AndroidError::Unsupported(format!("Appium transport does not support {other:?}; use ADB for device and app administration"))),

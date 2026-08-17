@@ -71,7 +71,7 @@ tempera-android eval --list --json
 tempera-android --serial emulator-5554 bench --iterations 20 --json
 ```
 
-MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. It includes bounded read-only `tempera_android_stream`; filesystem recording remains a deliberate CLI-only action. The read-only dashboard displays persisted sessions, latest semantic snapshots, and action receipts without participating in the control path.
+MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. It includes bounded read-only `tempera_android_stream`; filesystem recording remains a deliberate CLI-only action. The read-only dashboard displays sessions/devices, a selected semantic node, the last explicitly captured frame, receipts, and the latest explicit logcat/network/model/eval activity without participating in the control path.
 
 ## Target boundaries
 
