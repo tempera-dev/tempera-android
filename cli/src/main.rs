@@ -633,9 +633,7 @@ fn command_from_cli(command: Commands) -> Command {
             command: ClipboardCommand::Set { text },
         } => Command::ClipboardSet { text },
         Commands::Install { profile, api } => Command::InstallSdk { profile, api },
-        Commands::Upgrade => Command::Unsupported {
-            feature: "upgrade is managed by npm, Cargo, Homebrew, or GitHub Releases".to_string(),
-        },
+        Commands::Upgrade => Command::UpgradeSdk,
         Commands::Migrate {
             command: MigrateCommand::LegacyAvd { name, source, yes },
         } => Command::MigrateLegacyAvd {

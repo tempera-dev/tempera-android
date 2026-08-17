@@ -14,6 +14,7 @@ Build locally with Rust 1.93+:
 cargo install --path cli
 tempera-android doctor
 tempera-android install --profile google --api 36
+tempera-android upgrade
 tempera-android device list
 tempera-android --serial emulator-5554 snapshot --json
 tempera-android --serial emulator-5554 find "Continue" --json

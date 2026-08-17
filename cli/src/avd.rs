@@ -152,6 +152,34 @@ pub fn install_sdk(options: InstallOptions) -> Result<serde_json::Value> {
     }))
 }
 
+/// Refresh installed Android SDK packages using the official SDK manager.
+pub fn upgrade_sdk() -> Result<serde_json::Value> {
+    let root = sdk_root();
+    let sdkmanager = command_line_tool(&root, "sdkmanager").ok_or_else(|| {
+        AndroidError::Backend(format!(
+            "Required Android SDK command-line tool sdkmanager is missing under {}. Install the official command-line tools first, set ANDROID_SDK_ROOT, then rerun tempera-android upgrade.",
+            root.display()
+        ))
+    })?;
+    let mut command = Command::new(&sdkmanager);
+    command
+        .arg(format!("--sdk_root={}", path(&root)))
+        .arg("--update")
+        .env("ANDROID_SDK_ROOT", &root)
+        .env("ANDROID_HOME", &root)
+        .stdin(Stdio::piped());
+    let mut child = command.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(b"y\ny\ny\n")?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(AndroidError::Backend(command_error(&output)));
+    }
+    Ok(serde_json::json!({"sdkRoot": root, "sdkmanager": sdkmanager, "updated": true}))
+}
+
 pub fn list(store: &SessionStore) -> Result<Vec<ManagedAvdV1>> {
     let directory = store.root().join("devices");
     if !directory.exists() {

@@ -42,6 +42,7 @@ pub enum Command {
         profile: String,
         api: u32,
     },
+    UpgradeSdk,
     Run {
         task: String,
         model: Option<String>,
@@ -340,6 +341,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                 avd::install_sdk(avd::InstallOptions { profile, api })?,
             )
         }
+        Command::UpgradeSdk => return CommandResponse::success(request.id, avd::upgrade_sdk()?),
         Command::Run {
             task,
             model,
@@ -632,6 +634,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         }
         Command::Doctor
         | Command::InstallSdk { .. }
+        | Command::UpgradeSdk
         | Command::Run { .. }
         | Command::DeviceList
         | Command::DeviceConnect { .. }
