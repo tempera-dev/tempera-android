@@ -368,13 +368,17 @@ impl AdbBackend {
     }
 
     fn metadata(&self) -> Result<(String, String, [u32; 2])> {
-        let output = self.shell(&[
-            "sh",
-            "-c",
-            "wm size; echo __TEMPERA_ANDROID_WINDOW__; dumpsys window windows | grep -m 1 -E 'mCurrentFocus|mFocusedApp'",
-        ])?;
-        let screen = output.lines().find_map(parse_size).unwrap_or([1080, 1920]);
-        let component = output.split_whitespace().find(|value| {
+        // Do not pass a compound command to `adb shell sh -c`: adb flattens
+        // host arguments before the device shell sees them, which turns
+        // `wm size; ...` into an invalid `wm` invocation on Android 35+.
+        // Individual argv calls also work consistently on physical devices.
+        let size_output = self.shell(&["wm", "size"])?;
+        let window_output = self.shell(&["dumpsys", "window", "windows"])?;
+        let screen = size_output
+            .lines()
+            .find_map(parse_size)
+            .unwrap_or([1080, 1920]);
+        let component = window_output.split_whitespace().find(|value| {
             value.contains('/')
                 && value.chars().all(|character| {
                     character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '$' | '/')
