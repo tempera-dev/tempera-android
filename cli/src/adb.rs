@@ -628,13 +628,15 @@ pub(crate) fn validate_guard(action: &ActionV1, snapshot: &SnapshotV1) -> Result
 }
 
 pub(crate) fn validate_sensitive(action: &ActionV1, snapshot: &SnapshotV1) -> Result<()> {
-    let Some(selector) = action.selector.as_deref() else {
+    // A coordinate is still an action against the visible semantic tree. Do
+    // not let a planner sidestep the approval and password boundaries merely
+    // by switching from @eN to pixel coordinates (the vision fallback uses
+    // coordinates for canvas-only controls).
+    let targets = action_targets(action, snapshot);
+    if targets.is_empty() {
         return Ok(());
-    };
-    let Some(node) = snapshot.node(selector) else {
-        return Ok(());
-    };
-    if node.password
+    }
+    if targets.iter().any(|node| node.password)
         && matches!(action.kind.as_str(), "type" | "fill")
         && action
             .metadata
@@ -659,16 +661,33 @@ pub(crate) fn validate_sensitive(action: &ActionV1, snapshot: &SnapshotV1) -> Re
         "order",
         "submit",
     ];
-    if sensitive
-        .iter()
-        .any(|word| node.label.to_ascii_lowercase().contains(word))
-        && action.metadata.get("approval").map(String::as_str) != Some("granted")
-    {
-        return Err(AndroidError::InvalidInput(format!(
-            "Action targets consequential UI label {:?}; set metadata.approval=granted after explicit user approval", node.label
-        )));
+    let consequential = targets.iter().find(|node| {
+        sensitive
+            .iter()
+            .any(|word| node.label.to_ascii_lowercase().contains(word))
+    });
+    if let Some(node) = consequential {
+        if action.metadata.get("approval").map(String::as_str) != Some("granted") {
+            return Err(AndroidError::InvalidInput(format!(
+                "Action targets consequential UI label {:?}; set metadata.approval=granted after explicit user approval", node.label
+            )));
+        }
     }
     Ok(())
+}
+
+fn action_targets<'a>(action: &ActionV1, snapshot: &'a SnapshotV1) -> Vec<&'a NodeV1> {
+    if let Some(selector) = action.selector.as_deref() {
+        return snapshot.node(selector).into_iter().collect();
+    }
+    let Some([x, y]) = action.coordinates else {
+        return Vec::new();
+    };
+    snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.bounds.contains(x, y))
+        .collect()
 }
 
 fn resolve_selector<'a>(selector: &str, snapshot: &'a SnapshotV1) -> Result<&'a NodeV1> {
@@ -772,6 +791,41 @@ mod tests {
         action
             .metadata
             .insert("secretResolvedLocally".to_string(), "true".to_string());
+        assert!(validate_sensitive(&action, &snapshot).is_ok());
+    }
+
+    #[test]
+    fn coordinate_tap_still_requires_consequential_approval() {
+        let nodes = parse_hierarchy(r#"<hierarchy><node text="Send message" class="android.widget.Button" clickable="true" enabled="true" editable="false" scrollable="false" password="false" bounds="[10,20][30,40]"/></hierarchy>"#).unwrap();
+        let snapshot = SnapshotV1 {
+            schema_version: CONTROL_SCHEMA_V1.to_string(),
+            session_id: "s".to_string(),
+            serial: "e".to_string(),
+            target_kind: "emulator".to_string(),
+            package: String::new(),
+            activity: String::new(),
+            screen: [100, 100],
+            revision: 1,
+            state_hash: "sha256:x".to_string(),
+            captured_at_ms: 0,
+            nodes,
+        };
+        let mut action = ActionV1 {
+            action_id: "a".to_string(),
+            kind: "tap".to_string(),
+            selector: None,
+            text: None,
+            key: None,
+            direction: None,
+            coordinates: Some([20, 30]),
+            expected_revision: Some(1),
+            expected_state_hash: Some("sha256:x".to_string()),
+            metadata: BTreeMap::new(),
+        };
+        assert!(validate_sensitive(&action, &snapshot).is_err());
+        action
+            .metadata
+            .insert("approval".to_string(), "granted".to_string());
         assert!(validate_sensitive(&action, &snapshot).is_ok());
     }
 }

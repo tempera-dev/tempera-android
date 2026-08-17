@@ -31,6 +31,14 @@ impl RectV1 {
     pub fn center(&self) -> (u32, u32) {
         ((self.left + self.right) / 2, (self.top + self.bottom) / 2)
     }
+
+    /// Returns true when a display-space point is within this node's bounds.
+    /// Android bounds are half-open at their right/bottom edge, which also
+    /// prevents a coordinate immediately outside the display from matching a
+    /// full-screen root node.
+    pub fn contains(&self, x: u32, y: u32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
