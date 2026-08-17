@@ -88,6 +88,7 @@ fn handle(
 fn tools() -> Vec<Value> {
     vec![
         tool("tempera_android_snapshot", "Capture the current semantic Android UI snapshot with revision-bound @e references.", json!({"type":"object","properties":{"full":{"type":"boolean"}}})),
+        tool("tempera_android_stream", "Capture a bounded, read-only sequence of semantic snapshots through the canonical session path.", json!({"type":"object","properties":{"observations":{"type":"integer","minimum":1,"maximum":300},"intervalMs":{"type":"integer","minimum":0,"maximum":10000}}})),
         tool("tempera_android_find", "Find current semantic nodes by @e reference, visible label, or Android resource id.", json!({"type":"object","required":["query"],"properties":{"query":{"type":"string"}}})),
         tool("tempera_android_tap", "Tap one current @e reference, label, resource id, or coordinate pair.", json!({"type":"object","required":["selector"],"properties":{"selector":{"type":"string"},"expectedRevision":{"type":"integer"},"expectedStateHash":{"type":"string"},"approval":{"type":"string","enum":["granted"]}}})),
         tool("tempera_android_type", "Type into the current Android focus or selected editable node. Secret values must be resolved outside MCP.", json!({"type":"object","required":["text"],"properties":{"selector":{"type":"string"},"text":{"type":"string"},"expectedRevision":{"type":"integer"}}})),
@@ -213,6 +214,25 @@ fn command_for_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         },
+        "tempera_android_stream" => {
+            let observations = arguments
+                .get("observations")
+                .and_then(Value::as_u64)
+                .unwrap_or(10);
+            let interval_ms = arguments
+                .get("intervalMs")
+                .and_then(Value::as_u64)
+                .unwrap_or(500);
+            if !(1..=300).contains(&observations) || interval_ms > 10_000 {
+                return Err(
+                    "stream observations must be 1..=300 and intervalMs 0..=10000".to_string(),
+                );
+            }
+            Command::Stream {
+                observations: observations as u32,
+                interval_ms,
+            }
+        }
         "tempera_android_find" => Command::Find {
             query: arguments
                 .get("query")
@@ -351,6 +371,7 @@ mod tests {
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
             .collect();
         assert!(names.contains(&"tempera_android_snapshot"));
+        assert!(names.contains(&"tempera_android_stream"));
         assert!(names.contains(&"tempera_android_batch"));
         assert!(names.contains(&"tempera_android_find"));
         assert!(names.contains(&"tempera_android_eval"));
@@ -358,5 +379,19 @@ mod tests {
         assert!(names.contains(&"tempera_android_logs"));
         assert!(names.contains(&"tempera_android_state"));
         assert!(names.contains(&"tempera_android_run"));
+    }
+
+    #[test]
+    fn stream_mcp_input_is_bounded_before_integer_conversion() {
+        let result = command_for_tool(
+            "tempera_android_stream",
+            &json!({"observations": 4_294_967_297_u64}),
+            None,
+            "session".to_string(),
+            "adb".to_string(),
+            None,
+            None,
+        );
+        assert!(result.is_err());
     }
 }

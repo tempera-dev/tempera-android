@@ -18,6 +18,8 @@ tempera-android upgrade
 tempera-android device list
 tempera-android --serial emulator-5554 snapshot --json
 tempera-android --serial emulator-5554 find "Continue" --json
+tempera-android --serial emulator-5554 stream --observations 20 --interval-ms 250 --json
+tempera-android --serial emulator-5554 record trajectory.jsonl --observations 20 --json
 TEMPERA_ANDROID_MODEL=my-model tempera-android --serial emulator-5554 run "Open Settings" --json
 tempera-android --serial emulator-5554 network --json
 tempera-android --serial emulator-5554 location 37.7749 -122.4194 --json
@@ -35,6 +37,8 @@ tempera-android --serial emulator-5554 snapshot --json
 ## Controls, sessions, and safety
 
 Every machine response carries `tempera.android.control/v1`. `SnapshotV1` contains a monotonic revision, state hash, screen metadata, and compact semantic `@eN` references. References expire on a changed revision. A fused `batch` requires the same `expectedRevision` and `expectedStateHash` for every action; a stale bridge batch executes nothing.
+
+`stream` captures a bounded, read-only sequence through the exact same session-bound `snapshot` executor. `record PATH` writes that semantic sequence as JSONL (`tempera.android.record/v1`), never performs actions, redacts password nodes, and refuses to replace an existing file unless `--overwrite` is explicit. Recordings do not contain screenshots; capture one deliberately with `screenshot` when it is needed.
 
 Consequential targets such as send, post, purchase, transfer, or delete require explicit approval metadata. The bridge redacts password values, is loopback only, authenticates each request with a per-device token, rejects stale epochs, and provides at-most-once request handling. Raw shell is intentionally not an agent/MCP surface.
 
@@ -67,7 +71,7 @@ tempera-android eval --list --json
 tempera-android --serial emulator-5554 bench --iterations 20 --json
 ```
 
-MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. The read-only dashboard displays persisted sessions, latest semantic snapshots, and action receipts without participating in the control path.
+MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. It includes bounded read-only `tempera_android_stream`; filesystem recording remains a deliberate CLI-only action. The read-only dashboard displays persisted sessions, latest semantic snapshots, and action receipts without participating in the control path.
 
 ## Target boundaries
 

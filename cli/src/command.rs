@@ -10,6 +10,7 @@ use crate::model::{ActionReceiptV1, ActionV1, CONTROL_SCHEMA_V1};
 use crate::runner;
 use crate::session::SessionStore;
 use crate::skills::SkillStore;
+use crate::stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -88,6 +89,16 @@ pub enum Command {
     },
     Screenshot {
         path: PathBuf,
+    },
+    Stream {
+        observations: u32,
+        interval_ms: u64,
+    },
+    Record {
+        path: PathBuf,
+        observations: u32,
+        interval_ms: u64,
+        overwrite: bool,
     },
     Find {
         query: String,
@@ -198,6 +209,9 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
     // executor for observations/actions, so retain a credential-free request
     // envelope for that loop.
     let runner_request = request.clone();
+    // Recording delegates each observation through the same command executor;
+    // retain the full envelope before destructuring its output path.
+    let recording_request = request.clone();
     match request.command {
         Command::SessionList => return CommandResponse::success(request.id, store.list()?),
         Command::SessionClose => {
@@ -228,6 +242,36 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                     "receipts": store.receipts(&request.session_id)?,
                 }),
             )
+        }
+        Command::Stream {
+            observations,
+            interval_ms,
+        } => {
+            let events = stream::capture(&request, observations, interval_ms)?;
+            return CommandResponse::success(
+                request.id,
+                json!({
+                    "schemaVersion": "tempera.android.stream/v1",
+                    "sessionId": request.session_id,
+                    "events": events,
+                    "readOnly": true,
+                }),
+            );
+        }
+        Command::Record {
+            path,
+            observations,
+            interval_ms,
+            overwrite,
+        } => {
+            let result = stream::record(
+                &recording_request,
+                &path,
+                observations,
+                interval_ms,
+                overwrite,
+            )?;
+            return CommandResponse::success(request.id, result);
         }
         Command::SkillsList => {
             return CommandResponse::success(request.id, SkillStore::from_environment()?.list()?)
@@ -646,6 +690,8 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         | Command::SessionList
         | Command::SessionClose
         | Command::State
+        | Command::Stream { .. }
+        | Command::Record { .. }
         | Command::SkillsList
         | Command::DashboardStatus
         | Command::Unsupported { .. } => unreachable!(),

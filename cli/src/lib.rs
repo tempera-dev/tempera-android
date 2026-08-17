@@ -20,6 +20,7 @@ pub mod model;
 pub mod runner;
 pub mod session;
 pub mod skills;
+pub mod stream;
 
 pub use command::{execute, CommandRequest, CommandResponse};
 pub use error::{AndroidError, Result};

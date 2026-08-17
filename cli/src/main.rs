@@ -51,6 +51,24 @@ enum Commands {
     Screenshot {
         path: PathBuf,
     },
+    /// Capture a bounded, read-only sequence of semantic snapshots.
+    Stream {
+        #[arg(long, default_value_t = 10)]
+        observations: u32,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+    },
+    /// Write a bounded, read-only semantic trajectory as JSONL.
+    Record {
+        path: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        observations: u32,
+        #[arg(long, default_value_t = 500)]
+        interval_ms: u64,
+        /// Explicitly replace an existing requested record file.
+        #[arg(long)]
+        overwrite: bool,
+    },
     Find {
         query: String,
     },
@@ -484,6 +502,24 @@ fn command_from_cli(command: Commands) -> Command {
         } => Command::AppPermissions { package },
         Commands::Snapshot { full } => Command::Snapshot { full },
         Commands::Screenshot { path } => Command::Screenshot { path },
+        Commands::Stream {
+            observations,
+            interval_ms,
+        } => Command::Stream {
+            observations,
+            interval_ms,
+        },
+        Commands::Record {
+            path,
+            observations,
+            interval_ms,
+            overwrite,
+        } => Command::Record {
+            path,
+            observations,
+            interval_ms,
+            overwrite,
+        },
         Commands::Find { query } => Command::Find { query },
         Commands::Tap(arguments) => Command::Action {
             action: action(

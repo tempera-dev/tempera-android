@@ -60,3 +60,8 @@ and receipts. The optional generic Appium W3C adapter translates XML page
 source and bounded pointer/key actions into the same public contract; provider
 adapters remain behind that seam and must source credentials from a local
 resolver, never checked-in configuration.
+
+`stream` and `record` are observation-only adjuncts: they call the canonical
+snapshot executor on a bounded interval instead of connecting directly to a
+backend. Records are JSONL semantic trajectories with password nodes redacted;
+they contain no screenshots, actions, shell output, or planner secrets.
