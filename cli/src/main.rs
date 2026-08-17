@@ -87,7 +87,10 @@ enum Commands {
     Run {
         task: String,
     },
-    Bench,
+    Bench {
+        #[arg(long, default_value_t = 20)]
+        iterations: u32,
+    },
     Eval {
         #[arg(long)]
         list: bool,
@@ -536,9 +539,7 @@ fn command_from_cli(command: Commands) -> Command {
         Commands::Run { task: _ } => Command::Unsupported {
             feature: "run is pending the model-planner port".to_string(),
         },
-        Commands::Bench => Command::Unsupported {
-            feature: "bench is pending the benchmark port".to_string(),
-        },
+        Commands::Bench { iterations } => Command::Bench { iterations },
         Commands::Eval {
             list,
             case_id,

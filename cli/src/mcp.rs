@@ -80,6 +80,7 @@ fn tools() -> Vec<Value> {
         tool("tempera_android_devices", "List attached Android emulators and physical devices.", json!({"type":"object","properties":{}})),
         tool("tempera_android_session", "Inspect or close a Tempera Android session.", json!({"type":"object","properties":{"close":{"type":"boolean"}}})),
         tool("tempera_android_eval", "List deterministic evaluation contracts or grade the current observed state against one contract.", json!({"type":"object","properties":{"list":{"type":"boolean"},"case":{"type":"string"}}})),
+        tool("tempera_android_bench", "Measure semantic observation latency without mutating the Android target.", json!({"type":"object","properties":{"iterations":{"type":"integer","minimum":3,"maximum":200}}})),
     ]
 }
 
@@ -229,6 +230,12 @@ fn command_for_tool(
                 .map(str::to_string),
             output: None,
         },
+        "tempera_android_bench" => Command::Bench {
+            iterations: arguments
+                .get("iterations")
+                .and_then(Value::as_u64)
+                .unwrap_or(20) as u32,
+        },
         _ => return Err(format!("Unknown tool: {name}")),
     };
     Ok(CommandRequest {
@@ -262,5 +269,6 @@ mod tests {
         assert!(names.contains(&"tempera_android_batch"));
         assert!(names.contains(&"tempera_android_find"));
         assert!(names.contains(&"tempera_android_eval"));
+        assert!(names.contains(&"tempera_android_bench"));
     }
 }

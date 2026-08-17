@@ -52,6 +52,7 @@ tempera-android --serial emulator-5554 mcp
 tempera-android daemon serve --listen 127.0.0.1:7421
 tempera-android dashboard serve --listen 127.0.0.1:7422
 tempera-android eval --list --json
+tempera-android --serial emulator-5554 bench --iterations 20 --json
 ```
 
 MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. The read-only dashboard displays persisted sessions, latest semantic snapshots, and action receipts without participating in the control path.

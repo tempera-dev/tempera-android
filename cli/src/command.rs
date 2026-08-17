@@ -1,5 +1,6 @@
 use crate::adb::{self, AdbBackend};
 use crate::avd::{self, CreateOptions, StartOptions};
+use crate::benchmark;
 use crate::bridge;
 use crate::error::{AndroidError, Result};
 use crate::evals;
@@ -94,6 +95,9 @@ pub enum Command {
     BridgeEnable,
     BridgeDisable,
     DashboardStatus,
+    Bench {
+        iterations: u32,
+    },
     Eval {
         list: bool,
         case: Option<String>,
@@ -256,6 +260,7 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         | Command::Find { .. }
         | Command::Action { .. }
         | Command::Batch { .. }
+        | Command::Bench { .. }
         | Command::Eval { list: false, .. } => select_bridge(&request.transport, &serial, &store)?,
         _ => None,
     };
@@ -379,6 +384,44 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         Command::BridgeDisable => {
             bridge::disable(&backend)?;
             CommandResponse::success(request.id, bridge::status(&serial, &store)?)?
+        }
+        Command::Bench { iterations } => {
+            let iterations = iterations.clamp(3, 200);
+            let mut observation_ms = Vec::with_capacity(iterations as usize);
+            let mut payload_bytes = Vec::with_capacity(iterations as usize);
+            let transport = if let Some(mut bridge) = bridge_client {
+                session.transport = "bridge".to_string();
+                for _ in 0..iterations {
+                    let started = std::time::Instant::now();
+                    let snapshot = bridge.observe(&mut session)?;
+                    observation_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+                    payload_bytes.push(serde_json::to_vec(&snapshot)?.len());
+                    store.save_snapshot(&session.session_id, &snapshot)?;
+                }
+                "native-accessibility-bridge"
+            } else {
+                session.transport = "adb".to_string();
+                for _ in 0..iterations {
+                    let started = std::time::Instant::now();
+                    let snapshot = backend.snapshot(&mut session)?;
+                    observation_ms.push(started.elapsed().as_secs_f64() * 1000.0);
+                    payload_bytes.push(serde_json::to_vec(&snapshot)?.len());
+                    store.save_snapshot(&session.session_id, &snapshot)?;
+                }
+                "adb-uiautomator"
+            };
+            store.save(&session)?;
+            CommandResponse::success(
+                request.id,
+                json!({
+                    "schemaVersion": "tempera.android.benchmark/v1",
+                    "iterations": iterations,
+                    "transport": transport,
+                    "observation": benchmark::summarize(&observation_ms),
+                    "semanticPayloadBytes": {"mean": payload_bytes.iter().sum::<usize>() as f64 / payload_bytes.len() as f64, "min": payload_bytes.iter().min(), "max": payload_bytes.iter().max()},
+                    "note": "Observation-only measurement. Compare transports on the same target and publish raw reports before making performance claims.",
+                }),
+            )?
         }
         Command::Eval { list, case, output } => {
             if list {

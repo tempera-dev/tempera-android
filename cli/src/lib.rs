@@ -6,6 +6,7 @@
 
 pub mod adb;
 pub mod avd;
+pub mod benchmark;
 pub mod bridge;
 pub mod command;
 pub mod daemon;
