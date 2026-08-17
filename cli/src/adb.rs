@@ -321,6 +321,47 @@ impl AdbBackend {
         .map(|_| ())
     }
 
+    pub fn logs(&self, lines: u32) -> Result<String> {
+        self.shell(&["logcat", "-d", "-t", &lines.clamp(1, 2_000).to_string()])
+    }
+
+    pub fn network_status(&self) -> Result<String> {
+        self.shell(&["dumpsys", "connectivity"])
+    }
+
+    pub fn clipboard_get(&self) -> Result<String> {
+        self.shell(&["cmd", "clipboard", "get"])
+    }
+
+    pub fn clipboard_set(&self, value: &str) -> Result<()> {
+        self.shell(&["cmd", "clipboard", "set", value]).map(|_| ())
+    }
+
+    pub fn emulator_location(&self, latitude: f64, longitude: f64) -> Result<()> {
+        if !self.serial.starts_with("emulator-") {
+            return Err(AndroidError::InvalidInput(
+                "location injection is emulator-only in the ADB backend; a physical device location must be changed by its owner or integration provider".to_string(),
+            ));
+        }
+        if !latitude.is_finite()
+            || !longitude.is_finite()
+            || !(-90.0..=90.0).contains(&latitude)
+            || !(-180.0..=180.0).contains(&longitude)
+        {
+            return Err(AndroidError::InvalidInput(
+                "latitude must be -90..90 and longitude must be -180..180".to_string(),
+            ));
+        }
+        self.run_target(&[
+            "emu",
+            "geo",
+            "fix",
+            &longitude.to_string(),
+            &latitude.to_string(),
+        ])
+        .map(|_| ())
+    }
+
     pub fn shell(&self, arguments: &[&str]) -> Result<String> {
         let mut values = vec!["shell"];
         values.extend_from_slice(arguments);

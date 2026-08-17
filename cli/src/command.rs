@@ -87,6 +87,18 @@ pub enum Command {
     AppDeeplink {
         uri: String,
     },
+    Logs {
+        lines: u32,
+    },
+    NetworkStatus,
+    LocationSet {
+        latitude: f64,
+        longitude: f64,
+    },
+    ClipboardGet,
+    ClipboardSet {
+        text: String,
+    },
     SessionList,
     SessionClose,
     BridgeStatus,
@@ -385,6 +397,29 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         Command::AppDeeplink { uri } => {
             backend.app_deeplink(&uri)?;
             CommandResponse::success(request.id, json!({"uri": uri}))?
+        }
+        Command::Logs { lines } => {
+            CommandResponse::success(request.id, json!({"logcat": backend.logs(lines)?}))?
+        }
+        Command::NetworkStatus => {
+            CommandResponse::success(request.id, json!({"state": backend.network_status()?}))?
+        }
+        Command::LocationSet {
+            latitude,
+            longitude,
+        } => {
+            backend.emulator_location(latitude, longitude)?;
+            CommandResponse::success(
+                request.id,
+                json!({"latitude": latitude, "longitude": longitude}),
+            )?
+        }
+        Command::ClipboardGet => {
+            CommandResponse::success(request.id, json!({"text": backend.clipboard_get()?.trim()}))?
+        }
+        Command::ClipboardSet { text } => {
+            backend.clipboard_set(&text)?;
+            CommandResponse::success(request.id, json!({"set": true}))?
         }
         Command::BridgeStatus => {
             CommandResponse::success(request.id, bridge::status(&serial, &store)?)?

@@ -16,6 +16,8 @@ tempera-android doctor
 tempera-android device list
 tempera-android --serial emulator-5554 snapshot --json
 tempera-android --serial emulator-5554 find "Continue" --json
+tempera-android --serial emulator-5554 network --json
+tempera-android --serial emulator-5554 location 37.7749 -122.4194 --json
 ```
 
 Android SDK tools are discovered through `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) and the host defaults. Managed emulator lifecycle uses `sdkmanager`, `avdmanager`, `emulator`, and `adb` directly; it deliberately does not depend on Google's experimental `android` CLI.

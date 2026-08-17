@@ -83,6 +83,19 @@ enum Commands {
         #[command(subcommand)]
         command: DashboardCommand,
     },
+    Logs {
+        #[arg(long, default_value_t = 200)]
+        lines: u32,
+    },
+    Network,
+    Location {
+        latitude: f64,
+        longitude: f64,
+    },
+    Clipboard {
+        #[command(subcommand)]
+        command: ClipboardCommand,
+    },
     Install,
     Upgrade,
     Run {
@@ -205,6 +218,12 @@ enum DashboardCommand {
         #[arg(long, default_value = "127.0.0.1:7422")]
         listen: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ClipboardCommand {
+    Get,
+    Set { text: String },
 }
 
 #[derive(Debug, Args)]
@@ -544,6 +563,21 @@ fn command_from_cli(command: Commands) -> Command {
         Commands::Dashboard {
             command: DashboardCommand::Status,
         } => Command::DashboardStatus,
+        Commands::Logs { lines } => Command::Logs { lines },
+        Commands::Network => Command::NetworkStatus,
+        Commands::Location {
+            latitude,
+            longitude,
+        } => Command::LocationSet {
+            latitude,
+            longitude,
+        },
+        Commands::Clipboard {
+            command: ClipboardCommand::Get,
+        } => Command::ClipboardGet,
+        Commands::Clipboard {
+            command: ClipboardCommand::Set { text },
+        } => Command::ClipboardSet { text },
         Commands::Install => Command::Unsupported {
             feature: "install is pending the cross-platform SDK bootstrap port".to_string(),
         },
