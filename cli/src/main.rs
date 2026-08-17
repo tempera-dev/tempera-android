@@ -47,6 +47,9 @@ enum Commands {
     Screenshot {
         path: PathBuf,
     },
+    Find {
+        query: String,
+    },
     Tap(ActionArgs),
     #[command(name = "long-press")]
     LongPress(ActionArgs),
@@ -85,7 +88,14 @@ enum Commands {
         task: String,
     },
     Bench,
-    Eval,
+    Eval {
+        #[arg(long)]
+        list: bool,
+        #[arg(long = "case")]
+        case_id: Option<String>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     Skills,
     Close,
 }
@@ -384,6 +394,7 @@ fn command_from_cli(command: Commands) -> Command {
         },
         Commands::Snapshot { full } => Command::Snapshot { full },
         Commands::Screenshot { path } => Command::Screenshot { path },
+        Commands::Find { query } => Command::Find { query },
         Commands::Tap(arguments) => Command::Action {
             action: action(
                 "tap",
@@ -528,8 +539,14 @@ fn command_from_cli(command: Commands) -> Command {
         Commands::Bench => Command::Unsupported {
             feature: "bench is pending the benchmark port".to_string(),
         },
-        Commands::Eval => Command::Unsupported {
-            feature: "eval is pending the deterministic-eval port".to_string(),
+        Commands::Eval {
+            list,
+            case_id,
+            output,
+        } => Command::Eval {
+            list,
+            case: case_id,
+            output,
         },
         Commands::Skills => Command::Unsupported {
             feature: "skills is pending the privacy-bounded cache port".to_string(),

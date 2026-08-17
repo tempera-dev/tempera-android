@@ -70,6 +70,7 @@ fn handle(
 fn tools() -> Vec<Value> {
     vec![
         tool("tempera_android_snapshot", "Capture the current semantic Android UI snapshot with revision-bound @e references.", json!({"type":"object","properties":{"full":{"type":"boolean"}}})),
+        tool("tempera_android_find", "Find current semantic nodes by @e reference, visible label, or Android resource id.", json!({"type":"object","required":["query"],"properties":{"query":{"type":"string"}}})),
         tool("tempera_android_tap", "Tap one current @e reference, label, resource id, or coordinate pair.", json!({"type":"object","required":["selector"],"properties":{"selector":{"type":"string"},"expectedRevision":{"type":"integer"},"expectedStateHash":{"type":"string"},"approval":{"type":"string","enum":["granted"]}}})),
         tool("tempera_android_type", "Type into the current Android focus or selected editable node. Secret values must be resolved outside MCP.", json!({"type":"object","required":["text"],"properties":{"selector":{"type":"string"},"text":{"type":"string"},"expectedRevision":{"type":"integer"}}})),
         tool("tempera_android_press", "Press an Android key such as ENTER, BACK, HOME, or TAB.", json!({"type":"object","required":["key"],"properties":{"key":{"type":"string"},"expectedRevision":{"type":"integer"}}})),
@@ -78,6 +79,7 @@ fn tools() -> Vec<Value> {
         tool("tempera_android_apps", "List installed Android application packages.", json!({"type":"object","properties":{"includeSystem":{"type":"boolean"}}})),
         tool("tempera_android_devices", "List attached Android emulators and physical devices.", json!({"type":"object","properties":{}})),
         tool("tempera_android_session", "Inspect or close a Tempera Android session.", json!({"type":"object","properties":{"close":{"type":"boolean"}}})),
+        tool("tempera_android_eval", "List deterministic evaluation contracts or grade the current observed state against one contract.", json!({"type":"object","properties":{"list":{"type":"boolean"},"case":{"type":"string"}}})),
     ]
 }
 
@@ -172,6 +174,13 @@ fn command_for_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         },
+        "tempera_android_find" => Command::Find {
+            query: arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "query is required".to_string())?
+                .to_string(),
+        },
         "tempera_android_tap" => Command::Action {
             action: action("tap")?,
         },
@@ -209,6 +218,17 @@ fn command_for_tool(
             Command::SessionClose
         }
         "tempera_android_session" => Command::SessionList,
+        "tempera_android_eval" => Command::Eval {
+            list: arguments
+                .get("list")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            case: arguments
+                .get("case")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            output: None,
+        },
         _ => return Err(format!("Unknown tool: {name}")),
     };
     Ok(CommandRequest {
@@ -240,5 +260,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"tempera_android_snapshot"));
         assert!(names.contains(&"tempera_android_batch"));
+        assert!(names.contains(&"tempera_android_find"));
+        assert!(names.contains(&"tempera_android_eval"));
     }
 }

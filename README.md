@@ -15,6 +15,7 @@ cargo install --path cli
 tempera-android doctor
 tempera-android device list
 tempera-android --serial emulator-5554 snapshot --json
+tempera-android --serial emulator-5554 find "Continue" --json
 ```
 
 Android SDK tools are discovered through `ANDROID_SDK_ROOT` (or `ANDROID_HOME`) and the host defaults. Managed emulator lifecycle uses `sdkmanager`, `avdmanager`, `emulator`, and `adb` directly; it deliberately does not depend on Google's experimental `android` CLI.
@@ -50,6 +51,7 @@ tempera-android --serial emulator-5554 --transport bridge snapshot --json
 tempera-android --serial emulator-5554 mcp
 tempera-android daemon serve --listen 127.0.0.1:7421
 tempera-android dashboard serve --listen 127.0.0.1:7422
+tempera-android eval --list --json
 ```
 
 MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. The read-only dashboard displays persisted sessions, latest semantic snapshots, and action receipts without participating in the control path.

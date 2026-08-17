@@ -11,6 +11,7 @@ pub mod command;
 pub mod daemon;
 pub mod dashboard;
 pub mod error;
+pub mod evals;
 pub mod mcp;
 pub mod model;
 pub mod session;

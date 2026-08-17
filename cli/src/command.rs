@@ -2,6 +2,7 @@ use crate::adb::{self, AdbBackend};
 use crate::avd::{self, CreateOptions, StartOptions};
 use crate::bridge;
 use crate::error::{AndroidError, Result};
+use crate::evals;
 use crate::model::{ActionReceiptV1, ActionV1, CONTROL_SCHEMA_V1};
 use crate::session::SessionStore;
 use serde::{Deserialize, Serialize};
@@ -61,6 +62,9 @@ pub enum Command {
     Screenshot {
         path: PathBuf,
     },
+    Find {
+        query: String,
+    },
     Action {
         action: ActionV1,
     },
@@ -90,6 +94,11 @@ pub enum Command {
     BridgeEnable,
     BridgeDisable,
     DashboardStatus,
+    Eval {
+        list: bool,
+        case: Option<String>,
+        output: Option<PathBuf>,
+    },
     Unsupported {
         feature: String,
     },
@@ -220,6 +229,11 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
                 }),
             );
         }
+        Command::Eval {
+            list: true,
+            case: None,
+            output: None,
+        } => return CommandResponse::success(request.id, evals::cases()),
         Command::DashboardStatus => {
             return CommandResponse::success(
                 request.id,
@@ -238,9 +252,11 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
     let backend = AdbBackend::new(serial.clone())?;
     let mut session = store.get_or_create(&request.session_id, &serial, &request.transport)?;
     let bridge_client = match &request.command {
-        Command::Snapshot { .. } | Command::Action { .. } | Command::Batch { .. } => {
-            select_bridge(&request.transport, &serial, &store)?
-        }
+        Command::Snapshot { .. }
+        | Command::Find { .. }
+        | Command::Action { .. }
+        | Command::Batch { .. }
+        | Command::Eval { list: false, .. } => select_bridge(&request.transport, &serial, &store)?,
         _ => None,
     };
     let response = match request.command {
@@ -267,6 +283,32 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         Command::Screenshot { path } => {
             backend.screenshot(&path)?;
             CommandResponse::success(request.id, json!({"path": path}))?
+        }
+        Command::Find { query } => {
+            let snapshot = if let Some(mut bridge) = bridge_client {
+                session.transport = "bridge".to_string();
+                bridge.observe(&mut session)?
+            } else {
+                session.transport = "adb".to_string();
+                backend.snapshot(&mut session)?
+            };
+            store.save(&session)?;
+            store.save_snapshot(&session.session_id, &snapshot)?;
+            let normalized = query.to_lowercase();
+            let nodes = snapshot
+                .nodes
+                .iter()
+                .filter(|node| {
+                    node.reference == query
+                        || node.label.to_lowercase().contains(&normalized)
+                        || node
+                            .resource_id
+                            .as_deref()
+                            .is_some_and(|id| id.to_lowercase().contains(&normalized))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            CommandResponse::success(request.id, json!({"snapshot": snapshot, "nodes": nodes}))?
         }
         Command::Action { action } => {
             let receipt = if let Some(mut bridge) = bridge_client {
@@ -337,6 +379,33 @@ fn execute_inner(request: CommandRequest) -> Result<CommandResponse> {
         Command::BridgeDisable => {
             bridge::disable(&backend)?;
             CommandResponse::success(request.id, bridge::status(&serial, &store)?)?
+        }
+        Command::Eval { list, case, output } => {
+            if list {
+                return Err(AndroidError::InvalidInput(
+                    "eval --list cannot be combined with a target command".to_string(),
+                ));
+            }
+            let case = case.ok_or_else(|| {
+                AndroidError::InvalidInput("eval requires --case CASE_ID or --list".to_string())
+            })?;
+            let snapshot = if let Some(mut bridge) = bridge_client {
+                session.transport = "bridge".to_string();
+                bridge.observe(&mut session)?
+            } else {
+                session.transport = "adb".to_string();
+                backend.snapshot(&mut session)?
+            };
+            store.save(&session)?;
+            store.save_snapshot(&session.session_id, &snapshot)?;
+            let definition = evals::case(&case).ok_or_else(|| {
+                AndroidError::InvalidInput(format!("Unknown eval case {case:?}; use eval --list"))
+            })?;
+            let report = evals::evaluate(definition, &snapshot);
+            if let Some(output) = output {
+                std::fs::write(&output, serde_json::to_vec_pretty(&report)?)?;
+            }
+            CommandResponse::success(request.id, report)?
         }
         Command::Doctor
         | Command::DeviceList
