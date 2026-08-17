@@ -57,31 +57,7 @@ impl AdbBackend {
 
     pub fn device_list(&self) -> Result<Vec<DeviceInfo>> {
         let output = self.run_global(&["devices", "-l"])?;
-        Ok(output
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() {
-                    return None;
-                }
-                let mut parts = line.splitn(3, char::is_whitespace);
-                let serial = parts.next()?.to_string();
-                let state = parts.next().unwrap_or("unknown").to_string();
-                let details = parts.next().unwrap_or("").trim().to_string();
-                Some(DeviceInfo {
-                    target_kind: if serial.starts_with("emulator-") {
-                        "emulator"
-                    } else {
-                        "device"
-                    }
-                    .to_string(),
-                    serial,
-                    state,
-                    details,
-                })
-            })
-            .collect())
+        Ok(parse_device_list(&output))
     }
 
     pub fn ensure_ready(&self) -> Result<()> {
@@ -453,6 +429,30 @@ impl AdbBackend {
     }
 }
 
+fn parse_device_list(output: &str) -> Vec<DeviceInfo> {
+    output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let serial = parts.next()?.to_string();
+            let state = parts.next().unwrap_or("unknown").to_string();
+            let details = parts.collect::<Vec<_>>().join(" ");
+            Some(DeviceInfo {
+                target_kind: if serial.starts_with("emulator-") {
+                    "emulator"
+                } else {
+                    "device"
+                }
+                .to_string(),
+                serial,
+                state,
+                details,
+            })
+        })
+        .collect()
+}
+
 fn executable(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
@@ -743,6 +743,18 @@ mod tests {
         assert_eq!(nodes[0].label, "Search");
         assert_eq!(nodes[1].text, None);
         assert!(nodes[1].password);
+    }
+
+    #[test]
+    fn parses_column_aligned_adb_device_output() {
+        let devices = parse_device_list(
+            "List of devices attached\nemulator-5554\tdevice product:sdk_gphone64_x86_64 model:sdk_gphone64_x86_64 device:emu64xa transport_id:1\n",
+        );
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].serial, "emulator-5554");
+        assert_eq!(devices[0].state, "device");
+        assert_eq!(devices[0].target_kind, "emulator");
+        assert!(devices[0].details.contains("product:sdk_gphone64_x86_64"));
     }
 
     #[test]
