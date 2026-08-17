@@ -1,7 +1,7 @@
 {
   "notes": [
-    "Use `android-sim play <package>` for official Google Play installation.",
-    "Use `android-sim install-url <https-url> --sha256 <digest>` for a trusted direct APK."
+    "Open official Google Play listings manually inside a Play-enabled emulator; the engine does not automate store credentials or scrape APKs.",
+    "Use `tempera-android --serial <serial> app install <local-apk>` for a locally supplied APK after independently verifying its publisher and digest."
   ],
   "play_packages": [
     "com.spotify.music",

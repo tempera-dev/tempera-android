@@ -1,6 +1,12 @@
-# Android computer-use agent
+# Historical Android computer-use reference
 
-`android-simulator` includes a fast computer-use stack for Android Emulator. It is designed around a structured-first control loop rather than a screenshot-only loop.
+> This document describes the imported Python prototype and is retained only as
+> historical design context. It is not a shipped host runtime or command-line
+> interface. Use [`tempera-android`](../README.md) and the Rust contracts for
+> the supported product surface.
+
+The historical prototype used a structured-first control loop rather than a
+screenshot-only loop.
 
 ## Why this architecture
 

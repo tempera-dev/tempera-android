@@ -7,8 +7,8 @@ The project does not use “10x faster” as an unmeasured claim. Performance is
 On the target Apple Silicon Mac, run:
 
 ```bash
-android-agent bridge setup
-android-agent bench --iterations 30 --batch-size 8
+tempera-android --serial emulator-5554 bridge setup
+tempera-android --serial emulator-5554 bench --iterations 30 --json
 ```
 
 The benchmark reports:
