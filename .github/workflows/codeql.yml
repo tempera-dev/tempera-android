@@ -22,9 +22,5 @@ jobs:
       - uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.language == 'rust' && 'manual' || 'none' }}
-      - uses: dtolnay/rust-toolchain@1.93.1
-        if: matrix.language == 'rust'
-      - run: cargo build --workspace
-        if: matrix.language == 'rust'
+          build-mode: none
       - uses: github/codeql-action/analyze@v3
