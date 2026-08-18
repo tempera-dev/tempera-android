@@ -77,20 +77,26 @@ fn handle(mut stream: TcpStream, authority: &DaemonAuthority) -> Result<()> {
         let has_line = match read_bounded_line(&mut reader, &mut line) {
             Ok(has_line) => has_line,
             Err(AndroidError::InvalidInput(message)) => {
-                // Framing violations happen before command dispatch. Return one
-                // bounded rejection and close so no effect can be ambiguous.
+                // Framing violations happen before command dispatch. Erase any
+                // accumulated bytes, return one bounded rejection, and close so
+                // no effect or secret can be ambiguous.
+                line.fill(0);
                 write_response(
                     &mut stream,
                     &CommandResponse::failure("unknown".to_string(), message),
                 )?;
                 return Ok(());
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                line.fill(0);
+                return Err(error);
+            }
         };
         if !has_line {
             return Ok(());
         }
         if line.iter().all(u8::is_ascii_whitespace) {
+            line.fill(0);
             continue;
         }
         let request = match authority.authenticate_frame(&mut line) {
@@ -122,7 +128,13 @@ fn read_bounded_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Result<bo
     line.clear();
     loop {
         let (consume, complete) = {
-            let available = reader.fill_buf()?;
+            let available = match reader.fill_buf() {
+                Ok(available) => available,
+                Err(error) => {
+                    line.fill(0);
+                    return Err(AndroidError::Io(error));
+                }
+            };
             if available.is_empty() {
                 return Ok(!line.is_empty());
             }
@@ -130,6 +142,7 @@ fn read_bounded_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> Result<bo
             let consume = newline.map_or(available.len(), |index| index + 1);
             let copied = newline.unwrap_or(available.len());
             if line.len().saturating_add(copied) > MAX_DAEMON_LINE_BYTES {
+                line.fill(0);
                 return Err(AndroidError::InvalidInput(format!(
                     "daemon request exceeds the {MAX_DAEMON_LINE_BYTES}-byte limit"
                 )));
@@ -193,12 +206,13 @@ mod tests {
     }
 
     #[test]
-    fn daemon_rejects_oversized_lines_before_unbounded_growth() {
+    fn daemon_rejects_and_erases_oversized_lines_before_unbounded_growth() {
         let oversized = vec![b'x'; MAX_DAEMON_LINE_BYTES + 1];
         let mut reader = Cursor::new(oversized);
         let mut line = Vec::new();
         assert!(read_bounded_line(&mut reader, &mut line).is_err());
         assert!(line.len() <= MAX_DAEMON_LINE_BYTES);
+        assert!(line.iter().all(|byte| *byte == 0));
     }
 
     #[test]
