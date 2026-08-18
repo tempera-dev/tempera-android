@@ -623,12 +623,12 @@ fn create_token() -> Result<String> {
 fn token_write_command(token: &str) -> String {
     // `getFilesDir()` is created lazily by Android. Provision it before the
     // service first starts, while keeping the token private to the app UID.
-    // ADB has an outer device shell before `run-as ... sh -c` receives this
-    // command. Escape `$` for that outer shell so the app UID's shell—not
-    // ADB's outer shell—expands HOME. Without this, some Android images turn
-    // the path into `//files`, which is read-only.
+    // `adb shell` flattens nested `run-as ... sh -c` arguments, so neither
+    // `$HOME` nor a relative directory has a reliable meaning here. `/data/data`
+    // is Android's stable alias for the primary app-data directory; `run-as`
+    // confines this write to the companion UID.
     format!(
-        "umask 077; mkdir -p \"\\$HOME/files\"; printf %s {token} > \"\\$HOME/files/bridge.token\""
+        "umask 077; mkdir -p /data/data/{PACKAGE}/files; printf %s {token} > /data/data/{PACKAGE}/files/bridge.token"
     )
 }
 
@@ -653,7 +653,7 @@ mod tests {
     fn token_provisioning_creates_the_private_files_directory() {
         assert_eq!(
             token_write_command("abcdef"),
-            "umask 077; mkdir -p \"\\$HOME/files\"; printf %s abcdef > \"\\$HOME/files/bridge.token\""
+            "umask 077; mkdir -p /data/data/dev.tempera.android.bridge/files; printf %s abcdef > /data/data/dev.tempera.android.bridge/files/bridge.token"
         );
     }
 }
