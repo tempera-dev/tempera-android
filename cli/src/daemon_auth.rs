@@ -138,15 +138,14 @@ impl DaemonAuthority {
             }
             (None, _) => {}
         }
-        if self.scope == DaemonScope::TemperaUse {
-            if !matches!(request.transport.as_str(), "auto" | "adb" | "bridge")
+        if self.scope == DaemonScope::TemperaUse
+            && (!matches!(request.transport.as_str(), "auto" | "adb" | "bridge")
                 || request.appium_url.is_some()
-                || request.appium_capabilities.is_some()
-            {
-                return Err(AndroidError::Unsupported(
-                    "transport is outside this daemon token's authority".to_string(),
-                ));
-            }
+                || request.appium_capabilities.is_some())
+        {
+            return Err(AndroidError::Unsupported(
+                "transport is outside this daemon token's authority".to_string(),
+            ));
         }
         if !self.scope.permits(&request.command) {
             return Err(AndroidError::Unsupported(
