@@ -9,7 +9,7 @@ use crate::model::SessionV1;
 use crate::session::SessionStore;
 use serde_json::json;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -19,6 +19,14 @@ const DASHBOARD_MAX_SESSIONS: usize = 64;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn serve(address: &str) -> Result<()> {
+    let address: SocketAddr = address.parse().map_err(|error| {
+        AndroidError::InvalidInput(format!("invalid dashboard address: {error}"))
+    })?;
+    if !address.ip().is_loopback() {
+        return Err(AndroidError::InvalidInput(
+            "the inspector dashboard is local-only and must bind to loopback".to_string(),
+        ));
+    }
     let listener = TcpListener::bind(address)?;
     let (sender, receiver) = mpsc::sync_channel::<TcpStream>(DASHBOARD_QUEUE);
     let receiver = Arc::new(Mutex::new(receiver));
@@ -215,5 +223,11 @@ mod tests {
         assert_eq!(recent.len(), DASHBOARD_MAX_SESSIONS);
         assert_eq!(recent[0].session_id, "s065");
         assert_eq!(recent.last().unwrap().session_id, "s002");
+    }
+
+    #[test]
+    fn dashboard_rejects_non_loopback_binds_before_listening() {
+        let error = serve("0.0.0.0:0").unwrap_err();
+        assert!(error.to_string().contains("loopback"));
     }
 }
