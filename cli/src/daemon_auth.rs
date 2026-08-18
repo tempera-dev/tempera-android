@@ -100,10 +100,16 @@ impl DaemonAuthority {
         })
     }
 
-    pub(crate) fn authenticate_frame(&self, frame: &[u8]) -> Result<CommandRequest> {
-        let wire: AuthenticatedCommandRequest = serde_json::from_slice(frame).map_err(|_| {
+    /// Decode one owned request and erase the complete wire frame on every
+    /// success or rejection path. `Vec::clear` alone would retain the token in
+    /// reusable capacity until that allocation was overwritten or released.
+    pub(crate) fn authenticate_frame(&self, frame: &mut [u8]) -> Result<CommandRequest> {
+        let decoded = serde_json::from_slice::<AuthenticatedCommandRequest>(frame).map_err(|_| {
             AndroidError::InvalidInput("invalid authenticated daemon request".to_string())
-        })?;
+        });
+        frame.fill(0);
+        let wire = decoded?;
+
         let mut provided = wire.capability_token.into_bytes();
         let authenticated = constant_time_eq(&self.token, &provided);
         provided.fill(0);
@@ -251,6 +257,20 @@ mod tests {
         .unwrap_or_else(|error| panic!("frame encoding: {error}"))
     }
 
+    fn authenticate(
+        authority: &DaemonAuthority,
+        token: &str,
+        session_id: &str,
+        serial: Option<&str>,
+        transport: &str,
+        command: Value,
+    ) -> Result<CommandRequest> {
+        let mut encoded = frame(token, session_id, serial, transport, command);
+        let result = authority.authenticate_frame(&mut encoded);
+        assert!(encoded.iter().all(|byte| *byte == 0));
+        result
+    }
+
     #[test]
     fn valid_bound_token_and_allowed_command_are_accepted() -> Result<()> {
         let authority = DaemonAuthority::for_test(
@@ -259,13 +279,14 @@ mod tests {
             Some("session-1"),
             Some("device-1"),
         )?;
-        let request = authority.authenticate_frame(&frame(
+        let request = authenticate(
+            &authority,
             TOKEN,
             "session-1",
             Some("device-1"),
             "bridge",
             json!({"name": "snapshot", "arguments": {"full": false}}),
-        ))?;
+        )?;
         assert_eq!(request.session_id, "session-1");
         assert_eq!(request.serial.as_deref(), Some("device-1"));
         Ok(())
@@ -279,33 +300,33 @@ mod tests {
             Some("session-1"),
             Some("device-1"),
         )?;
-        assert!(authority
-            .authenticate_frame(&frame(
-                "fedcba9876543210fedcba9876543210",
-                "session-1",
-                Some("device-1"),
-                "auto",
-                json!({"name": "state"}),
-            ))
-            .is_err());
-        assert!(authority
-            .authenticate_frame(&frame(
-                TOKEN,
-                "session-2",
-                Some("device-1"),
-                "auto",
-                json!({"name": "state"}),
-            ))
-            .is_err());
-        assert!(authority
-            .authenticate_frame(&frame(
-                TOKEN,
-                "session-1",
-                Some("device-2"),
-                "auto",
-                json!({"name": "state"}),
-            ))
-            .is_err());
+        assert!(authenticate(
+            &authority,
+            "fedcba9876543210fedcba9876543210",
+            "session-1",
+            Some("device-1"),
+            "auto",
+            json!({"name": "state"}),
+        )
+        .is_err());
+        assert!(authenticate(
+            &authority,
+            TOKEN,
+            "session-2",
+            Some("device-1"),
+            "auto",
+            json!({"name": "state"}),
+        )
+        .is_err());
+        assert!(authenticate(
+            &authority,
+            TOKEN,
+            "session-1",
+            Some("device-2"),
+            "auto",
+            json!({"name": "state"}),
+        )
+        .is_err());
         Ok(())
     }
 
@@ -313,15 +334,15 @@ mod tests {
     fn unbound_tempera_use_token_cannot_select_an_explicit_device() -> Result<()> {
         let authority =
             DaemonAuthority::for_test(TOKEN, DaemonScope::TemperaUse, Some("session-1"), None)?;
-        assert!(authority
-            .authenticate_frame(&frame(
-                TOKEN,
-                "session-1",
-                Some("device-1"),
-                "auto",
-                json!({"name": "state"}),
-            ))
-            .is_err());
+        assert!(authenticate(
+            &authority,
+            TOKEN,
+            "session-1",
+            Some("device-1"),
+            "auto",
+            json!({"name": "state"}),
+        )
+        .is_err());
         Ok(())
     }
 
@@ -334,9 +355,15 @@ mod tests {
             json!({"name": "clipboardGet"}),
             json!({"name": "screenshot", "arguments": {"path": "/tmp/x.png", "persist": true}}),
         ] {
-            assert!(authority
-                .authenticate_frame(&frame(TOKEN, "session-1", None, "auto", command))
-                .is_err());
+            assert!(authenticate(
+                &authority,
+                TOKEN,
+                "session-1",
+                None,
+                "auto",
+                command,
+            )
+            .is_err());
         }
         let mut appium: Value = serde_json::from_slice(&frame(
             TOKEN,
@@ -346,9 +373,20 @@ mod tests {
             json!({"name": "state"}),
         ))?;
         appium["appiumUrl"] = json!("http://127.0.0.1:4723");
-        assert!(authority
-            .authenticate_frame(&serde_json::to_vec(&appium)?)
-            .is_err());
+        let mut encoded = serde_json::to_vec(&appium)?;
+        let result = authority.authenticate_frame(&mut encoded);
+        assert!(encoded.iter().all(|byte| *byte == 0));
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_frame_is_erased_before_rejection() -> Result<()> {
+        let authority =
+            DaemonAuthority::for_test(TOKEN, DaemonScope::TemperaUse, Some("session-1"), None)?;
+        let mut malformed = TOKEN.as_bytes().to_vec();
+        assert!(authority.authenticate_frame(&mut malformed).is_err());
+        assert!(malformed.iter().all(|byte| *byte == 0));
         Ok(())
     }
 
