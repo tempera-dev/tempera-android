@@ -93,7 +93,7 @@ fn handle(mut stream: TcpStream, authority: &DaemonAuthority) -> Result<()> {
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let request = match authority.authenticate_frame(&line) {
+        let request = match authority.authenticate_frame(&mut line) {
             Ok(request) => request,
             Err(_) => {
                 rejected_frames = rejected_frames.saturating_add(1);
