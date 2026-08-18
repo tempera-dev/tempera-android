@@ -201,9 +201,11 @@ pub fn step(request: &BrowserRequest, action: ActionV1) -> Result<Value> {
     let started = Instant::now();
     let response = execute(base_command(request, Command::Action { action }));
     if !response.ok {
-        return Err(AndroidError::Backend(response.error.unwrap_or_else(|| {
-            "Android browser action failed".to_string()
-        })));
+        return Err(AndroidError::Backend(
+            response
+                .error
+                .unwrap_or_else(|| "Android browser action failed".to_string()),
+        ));
     }
     let receipt: ActionReceiptV1 = serde_json::from_value(response.result.unwrap_or(Value::Null))?;
     let after = snapshot(request)?;
