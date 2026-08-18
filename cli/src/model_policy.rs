@@ -219,24 +219,55 @@ fn classify_reasoning(task: &str) -> Option<RouteReason> {
     // Consequential tasks are routed to the stronger planner when available,
     // but the existing approval gate remains authoritative at execution time.
     const CONSEQUENTIAL: &[&str] = &[
-        "buy", "purchase", "pay", "transfer", "send", "post", "submit", "book",
-        "order", "delete", "remove account", "unsubscribe", "permission", "credential",
+        "buy",
+        "purchase",
+        "pay",
+        "transfer",
+        "send",
+        "post",
+        "submit",
+        "book",
+        "order",
+        "delete",
+        "remove account",
+        "unsubscribe",
+        "permission",
+        "credential",
     ];
     if contains_any(task, CONSEQUENTIAL) {
         return Some(RouteReason::ConsequentialTask);
     }
 
     const RECOVERY: &[&str] = &[
-        "recover", "retry", "fix", "failed", "error", "unexpected", "stuck", "wrong screen",
-        "go back and", "if that doesn't work", "if that does not work",
+        "recover",
+        "retry",
+        "fix",
+        "failed",
+        "error",
+        "unexpected",
+        "stuck",
+        "wrong screen",
+        "go back and",
+        "if that doesn't work",
+        "if that does not work",
     ];
     if contains_any(task, RECOVERY) {
         return Some(RouteReason::RecoveryTask);
     }
 
     const LONG_HORIZON: &[&str] = &[
-        "then", "after that", "and then", "across apps", "another app", "compare", "find and",
-        "open and", "sign in and", "navigate to", "set up", "configure",
+        "then",
+        "after that",
+        "and then",
+        "across apps",
+        "another app",
+        "compare",
+        "find and",
+        "open and",
+        "sign in and",
+        "navigate to",
+        "set up",
+        "configure",
     ];
     if contains_any(task, LONG_HORIZON) || task.split_whitespace().count() >= 18 {
         return Some(RouteReason::LongHorizonTask);
@@ -250,7 +281,11 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 fn normalize(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
@@ -319,7 +354,9 @@ mod tests {
             vision: None,
             local_only: false,
         };
-        let decision = policy.route("Open the store and purchase the item", None).unwrap();
+        let decision = policy
+            .route("Open the store and purchase the item", None)
+            .unwrap();
         assert_eq!(decision.target.model, "reasoning");
         assert_eq!(decision.reason, RouteReason::ConsequentialTask);
     }
