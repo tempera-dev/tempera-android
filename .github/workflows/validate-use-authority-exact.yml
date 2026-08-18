@@ -12,11 +12,11 @@ on:
       - .github/workflows/validate-use-authority-exact.yml
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: validate-use-authority-exact-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt,clippy
-      - name: Create an ephemeral encrypted-input boundary
+      - name: Create and publish the ephemeral encrypted-input certificate
         shell: bash
         run: |
           set -euo pipefail
@@ -54,10 +54,20 @@ jobs:
             -days 1 \
             -out /tmp/use-validation/input-cert.pem \
             >/dev/null 2>&1
+          branch="${GITHUB_HEAD_REF:-diag/use-authority-exact-validation}"
+          cert_path=".github/agent/use-validation-cert-${GITHUB_RUN_ID}.b64"
+          cert_text="$(base64 -w0 /tmp/use-validation/input-cert.pem)"
+          api_content="$(printf '%s\n' "$cert_text" | base64 -w0)"
+          gh api \
+            --method PUT \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/contents/${cert_path}" \
+            -f message="ci: publish ephemeral Use validation certificate ${GITHUB_RUN_ID}" \
+            -f content="$api_content" \
+            -f branch="$branch" \
+            >/dev/null
           printf 'USE_VALIDATION_ENVELOPE_PREFIX=.github/agent/use-authority-envelope-%s\n' "$GITHUB_RUN_ID"
-          printf 'USE_VALIDATION_CERT_B64='
-          base64 -w0 /tmp/use-validation/input-cert.pem
-          printf '\n'
+          printf 'USE_VALIDATION_CERT_PATH=%s\n' "$cert_path"
       - name: Receive the CMS-encrypted immutable source envelope
         id: receive
         shell: bash
