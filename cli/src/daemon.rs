@@ -239,7 +239,10 @@ mod tests {
             let response: CommandResponse = serde_json::from_slice(&line)?;
             assert!(!response.ok);
             assert_eq!(response.id, "unknown");
-            assert_eq!(response.error.as_deref(), Some("Android daemon request rejected"));
+            assert_eq!(
+                response.error.as_deref(),
+                Some("Android daemon request rejected")
+            );
         }
         let mut trailing = [0_u8; 1];
         assert_eq!(reader.read(&mut trailing)?, 0);
