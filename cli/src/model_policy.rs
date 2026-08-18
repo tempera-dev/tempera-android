@@ -92,7 +92,7 @@ impl ModelPolicy {
     }
 
     pub fn validate(&self) -> Result<()> {
-        for target in [&self.fast, &self.reasoning].into_iter().flatten() {
+        for target in self.fast.iter().chain(self.reasoning.iter()) {
             validate_target(target)?;
             if self.local_only && !target.local {
                 return Err(AndroidError::InvalidInput(format!(
