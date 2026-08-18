@@ -355,15 +355,7 @@ mod tests {
             json!({"name": "clipboardGet"}),
             json!({"name": "screenshot", "arguments": {"path": "/tmp/x.png", "persist": true}}),
         ] {
-            assert!(authenticate(
-                &authority,
-                TOKEN,
-                "session-1",
-                None,
-                "auto",
-                command,
-            )
-            .is_err());
+            assert!(authenticate(&authority, TOKEN, "session-1", None, "auto", command,).is_err());
         }
         let mut appium: Value = serde_json::from_slice(&frame(
             TOKEN,
