@@ -5,6 +5,7 @@
 //! acceleration backend; ADB/UIAutomator remains the independent fallback.
 
 pub mod adb;
+pub mod android_browser;
 pub mod appium;
 pub mod avd;
 pub mod benchmark;
@@ -23,6 +24,9 @@ pub mod session;
 pub mod skills;
 pub mod stream;
 
+pub use android_browser::{
+    AndroidBrowserSnapshotV1 as _DeprecatedAndroidBrowserSnapshotV1,
+};
 pub use command::{execute, CommandRequest, CommandResponse};
 pub use error::{AndroidError, Result};
 pub use model::{ActionReceiptV1, ActionV1, SessionV1, SnapshotV1};
