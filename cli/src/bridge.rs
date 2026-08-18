@@ -397,13 +397,8 @@ pub fn setup(serial: &str, store: &SessionStore, apk: Option<&Path>) -> Result<B
     adb.app_install(&[path])?;
     let token = create_token()?;
     write_token(store, serial, &token)?;
-    adb.shell(&[
-        "run-as",
-        PACKAGE,
-        "sh",
-        "-c",
-        &format!("umask 077; printf %s {} > files/bridge.token", token),
-    ])?;
+    let device_token_command = token_write_command(&token);
+    adb.shell(&["run-as", PACKAGE, "sh", "-c", &device_token_command])?;
     enable(&adb)?;
     status(serial, store)
 }
@@ -625,6 +620,12 @@ fn create_token() -> Result<String> {
     Ok(hex::encode(value))
 }
 
+fn token_write_command(token: &str) -> String {
+    // `getFilesDir()` is created lazily by Android. Provision it before the
+    // service first starts, while keeping the token private to the app UID.
+    format!("umask 077; mkdir -p \"$HOME/files\"; printf %s {token} > \"$HOME/files/bridge.token\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,5 +641,13 @@ mod tests {
     #[test]
     fn bridge_token_paths_are_non_traversing() {
         assert_eq!(safe_serial("emulator-5554/../x"), "emulator_5554____x");
+    }
+
+    #[test]
+    fn token_provisioning_creates_the_private_files_directory() {
+        assert_eq!(
+            token_write_command("abcdef"),
+            "umask 077; mkdir -p \"$HOME/files\"; printf %s abcdef > \"$HOME/files/bridge.token\""
+        );
     }
 }
