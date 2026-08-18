@@ -175,7 +175,20 @@ if [[ "$mode" == "managed" && -n "$bridge_apk" ]]; then
 fi
 
 if [[ "$require_bridge" == true ]]; then
-  run_target bridge status
+  bridge_ready=false
+  for _ in $(seq 1 10); do
+    bridge_status="$(run_target bridge status)"
+    printf '%s\n' "$bridge_status"
+    if grep -q '"enabled": true' <<<"$bridge_status" && grep -q '"reachable": true' <<<"$bridge_status"; then
+      bridge_ready=true
+      break
+    fi
+    sleep 1
+  done
+  [[ "$bridge_ready" == true ]] || {
+    echo "Native bridge did not become enabled and reachable after setup" >&2
+    exit 1
+  }
   "$binary" --session "$session" --serial "$serial" --transport bridge --json snapshot
 fi
 

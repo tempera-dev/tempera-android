@@ -19,7 +19,9 @@ use std::process::Command;
 use std::time::Duration;
 
 pub const PACKAGE: &str = "dev.tempera.android.bridge";
-pub const SERVICE: &str = "dev.tempera.android.bridge/.BridgeAccessibilityService";
+pub const SERVICE: &str =
+    "dev.tempera.android.bridge/dev.tempera.android.bridge.BridgeAccessibilityService";
+const SHORT_SERVICE: &str = "dev.tempera.android.bridge/.BridgeAccessibilityService";
 pub const DEVICE_PORT: u16 = 6210;
 pub const PROTOCOL_VERSION: u64 = 3;
 
@@ -361,7 +363,7 @@ pub fn status(serial: &str, store: &SessionStore) -> Result<BridgeStatus> {
             "secure",
             "enabled_accessibility_services",
         ])
-        .map(|value| value.split(':').any(|service| service == SERVICE))
+        .map(|value| value.split(':').any(service_matches))
         .unwrap_or(false);
     let token_configured = token_path(store, serial).is_file();
     let mut value = BridgeStatus {
@@ -421,7 +423,7 @@ pub fn enable(adb: &AdbBackend) -> Result<()> {
         .filter(|value| !value.is_empty() && *value != "null")
         .map(str::to_string)
         .collect();
-    if !services.iter().any(|service| service == SERVICE) {
+    if !services.iter().any(|service| service_matches(service)) {
         services.push(SERVICE.to_string());
     }
     let joined = services.join(":");
@@ -448,7 +450,7 @@ pub fn disable(adb: &AdbBackend) -> Result<()> {
     let joined = existing
         .trim()
         .split(':')
-        .filter(|service| *service != SERVICE && *service != "null")
+        .filter(|service| !service_matches(service) && *service != "null")
         .collect::<Vec<_>>()
         .join(":");
     adb.shell(&[
@@ -633,6 +635,10 @@ fn token_write_command(token: &str) -> String {
     )
 }
 
+fn service_matches(value: &str) -> bool {
+    value == SERVICE || value == SHORT_SERVICE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +662,11 @@ mod tests {
             token_write_command("abcdef"),
             "run-as dev.tempera.android.bridge sh -c 'umask 077; mkdir -p files; printf %s abcdef > files/bridge.token'"
         );
+    }
+
+    #[test]
+    fn accessibility_component_accepts_android_short_and_full_forms() {
+        assert!(service_matches(SERVICE));
+        assert!(service_matches(SHORT_SERVICE));
     }
 }
