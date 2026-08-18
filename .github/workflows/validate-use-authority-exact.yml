@@ -1,0 +1,127 @@
+name: Validate exact Tempera Use authority child
+
+on:
+  push:
+    branches:
+      - diag/use-authority-exact-validation
+    paths:
+      - .github/workflows/validate-use-authority-exact.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-use-authority-exact-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      USE_SOURCE_SHA: c4bdb91c445b392040469e1377f65c4711bcd882
+      PATCH_SHA256: 376ceab819345c26e45d4f2740dce43e41d5552fa959aeb0880ff4e77720e2c5
+      PATCH_GZIP_SHA256: 404c550cf0f188fc57fcf471ec49e64df28508024a25101496b59270341e435f
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout immutable Tempera Use child
+        uses: actions/checkout@v4
+        with:
+          repository: tempera-dev/tempera-use
+          ref: ${{ env.USE_SOURCE_SHA }}
+          path: use
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt,clippy
+      - name: Verify and apply the exact staged product patch
+        shell: bash
+        working-directory: use
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$USE_SOURCE_SHA"
+          cat .github/agent/use-authority-*.b64 > /tmp/use-authority.patch.gz.b64
+          base64 --decode /tmp/use-authority.patch.gz.b64 > /tmp/use-authority.patch.gz
+          printf '%s  %s\n' "$PATCH_GZIP_SHA256" /tmp/use-authority.patch.gz | sha256sum --check -
+          gzip --decompress --stdout /tmp/use-authority.patch.gz > /tmp/use-authority.patch
+          printf '%s  %s\n' "$PATCH_SHA256" /tmp/use-authority.patch | sha256sum --check -
+          git apply --check /tmp/use-authority.patch
+          git apply /tmp/use-authority.patch
+          cargo fmt --all
+          git diff --check
+          python3 - <<'PY'
+          import subprocess
+          paths = subprocess.check_output(
+              ['git', 'diff', '--name-only'], text=True
+          ).splitlines()
+          outside = [
+              path for path in paths
+              if path != 'Cargo.lock' and not path.startswith('crates/orchestrator/')
+          ]
+          if outside:
+              raise SystemExit(f'product patch escaped authority scope: {outside}')
+          if 'Cargo.lock' not in paths or 'crates/orchestrator/src/lib.rs' not in paths:
+              raise SystemExit(f'expected product files missing: {paths}')
+          PY
+      - name: Locked orchestrator all-targets compile
+        working-directory: use
+        run: cargo check --locked -p tempera-use-orchestrator --all-targets
+      - name: Explicit session and registry authority
+        working-directory: use
+        run: cargo test --locked -p tempera-use-orchestrator --test authority_registry
+      - name: Per-surface serialization and close barriers
+        working-directory: use
+        run: cargo test --locked -p tempera-use-orchestrator --test surface_lanes
+      - name: Absolute deadline boundaries
+        working-directory: use
+        run: cargo test --locked -p tempera-use-orchestrator --test deadlines
+      - name: Durable intent, commit, and restart recovery
+        working-directory: use
+        run: cargo test --locked -p tempera-use-orchestrator --test durable_effects
+      - name: Lifecycle and adversarial executor boundaries
+        working-directory: use
+        run: |
+          cargo test --locked -p tempera-use-orchestrator --test session_lifecycle
+          cargo test --locked -p tempera-use-orchestrator --test malicious_executor
+      - name: Complete orchestrator suite
+        working-directory: use
+        run: cargo test --locked -p tempera-use-orchestrator
+      - name: Locked workspace compile
+        working-directory: use
+        run: cargo check --locked --workspace --all-targets
+      - name: Strict workspace Clippy
+        working-directory: use
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      - name: Complete workspace tests
+        working-directory: use
+        run: cargo test --locked --workspace
+      - name: Package exact validated product bytes and receipt
+        shell: bash
+        working-directory: use
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+          git diff --check
+          mkdir -p /tmp/use-authority-validated/crates
+          cp Cargo.lock /tmp/use-authority-validated/Cargo.lock
+          cp -R crates/orchestrator /tmp/use-authority-validated/crates/orchestrator
+          git diff --binary -- Cargo.lock crates/orchestrator > /tmp/use-authority-validated/use-authority.patch
+          sha256sum /tmp/use-authority-validated/use-authority.patch > /tmp/use-authority-validated/use-authority.patch.sha256
+          {
+            printf 'source_sha=%s\n' "$USE_SOURCE_SHA"
+            printf 'staged_patch_sha256=%s\n' "$PATCH_SHA256"
+            printf 'validated_patch_sha256='
+            sha256sum /tmp/use-authority-validated/use-authority.patch | cut -d' ' -f1
+            rustc --version --verbose
+            cargo --version --verbose
+            printf 'changed_files:\n'
+            git diff --name-only -- Cargo.lock crates/orchestrator
+          } > /tmp/use-authority-validated/receipt.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: use-authority-validated-${{ env.USE_SOURCE_SHA }}
+          path: /tmp/use-authority-validated
+          if-no-files-found: error
+          retention-days: 3
