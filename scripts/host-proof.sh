@@ -172,6 +172,8 @@ run_target snapshot
 if [[ "$mode" == "managed" && -n "$bridge_apk" ]]; then
   [[ -f "$bridge_apk" ]] || { echo "Bridge APK not found: $bridge_apk" >&2; exit 2; }
   run_target bridge setup --apk "$bridge_apk"
+  bridge_setting="$("$adb" -s "$serial" shell settings get secure enabled_accessibility_services | tr -d '\r')"
+  printf '{"bridgeEnabledServices":"%s"}\n' "$bridge_setting"
 fi
 
 if [[ "$require_bridge" == true ]]; then
