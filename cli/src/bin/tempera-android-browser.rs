@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tempera_android::android_browser::{self, BrowserRequest};
+use tempera_android::android_browser_fast;
 use tempera_android::model::{next_action_id, ActionV1};
 
 #[derive(Debug, Parser)]
@@ -155,7 +156,7 @@ fn run(request: BrowserRequest, command: Commands) -> tempera_android::Result<Va
             let serial = android_browser::resolve_serial(request.serial.as_deref())?;
             android_browser::targets(&serial, &cdp_socket)
         }
-        Commands::Tap(arguments) => android_browser::step(
+        Commands::Tap(arguments) => android_browser_fast::step(
             &request,
             action(
                 "tap",
@@ -167,7 +168,7 @@ fn run(request: BrowserRequest, command: Commands) -> tempera_android::Result<Va
                 arguments.approve_sensitive,
             ),
         ),
-        Commands::LongPress(arguments) => android_browser::step(
+        Commands::LongPress(arguments) => android_browser_fast::step(
             &request,
             action(
                 "long_press",
@@ -179,7 +180,7 @@ fn run(request: BrowserRequest, command: Commands) -> tempera_android::Result<Va
                 arguments.approve_sensitive,
             ),
         ),
-        Commands::Fill(arguments) => android_browser::step(
+        Commands::Fill(arguments) => android_browser_fast::step(
             &request,
             action(
                 "fill",
@@ -191,7 +192,7 @@ fn run(request: BrowserRequest, command: Commands) -> tempera_android::Result<Va
                 false,
             ),
         ),
-        Commands::Type(arguments) => android_browser::step(
+        Commands::Type(arguments) => android_browser_fast::step(
             &request,
             action(
                 "type",
@@ -203,7 +204,7 @@ fn run(request: BrowserRequest, command: Commands) -> tempera_android::Result<Va
                 false,
             ),
         ),
-        Commands::Press(arguments) => android_browser::step(
+        Commands::Press(arguments) => android_browser_fast::step(
             &request,
             action(
                 "press",
@@ -215,11 +216,11 @@ fn run(request: BrowserRequest, command: Commands) -> tempera_android::Result<Va
                 false,
             ),
         ),
-        Commands::Back(guard) => android_browser::step(
+        Commands::Back(guard) => android_browser_fast::step(
             &request,
             action("back", None, None, None, None, guard, false),
         ),
-        Commands::Scroll(arguments) => android_browser::step(
+        Commands::Scroll(arguments) => android_browser_fast::step(
             &request,
             action(
                 "scroll",
@@ -294,7 +295,10 @@ mod tests {
         );
         assert_eq!(action.expected_revision, Some(8));
         assert_eq!(action.expected_state_hash.as_deref(), Some("sha256:test"));
-        assert_eq!(action.metadata.get("surface").map(String::as_str), Some("android-browser"));
+        assert_eq!(
+            action.metadata.get("surface").map(String::as_str),
+            Some("android-browser")
+        );
     }
 
     #[test]
@@ -311,6 +315,9 @@ mod tests {
             },
             true,
         );
-        assert_eq!(action.metadata.get("approval").map(String::as_str), Some("granted"));
+        assert_eq!(
+            action.metadata.get("approval").map(String::as_str),
+            Some("granted")
+        );
     }
 }
