@@ -149,10 +149,7 @@ fn ensure_browser_foreground(request: &BrowserRequest, snapshot: &SnapshotV1) ->
     }
 }
 
-fn browser_snapshot(
-    request: &BrowserRequest,
-    android: SnapshotV1,
-) -> Result<BrowserSnapshotV1> {
+fn browser_snapshot(request: &BrowserRequest, android: SnapshotV1) -> Result<BrowserSnapshotV1> {
     ensure_browser_foreground(request, &android)?;
     let nodes = compact_nodes(&android.nodes);
     let url_hint = extract_url_hint(&nodes);
