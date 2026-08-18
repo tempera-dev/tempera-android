@@ -92,15 +92,13 @@ impl ModelPolicy {
     }
 
     pub fn validate(&self) -> Result<()> {
-        for target in [&self.fast, &self.reasoning] {
-            if let Some(target) = target {
-                validate_target(target)?;
-                if self.local_only && !target.local {
-                    return Err(AndroidError::InvalidInput(format!(
-                        "model policy is local-only but {} targets non-loopback endpoint {}",
-                        target.model, target.endpoint
-                    )));
-                }
+        for target in [&self.fast, &self.reasoning].into_iter().flatten() {
+            validate_target(target)?;
+            if self.local_only && !target.local {
+                return Err(AndroidError::InvalidInput(format!(
+                    "model policy is local-only but {} targets non-loopback endpoint {}",
+                    target.model, target.endpoint
+                )));
             }
         }
         if let Some(target) = &self.vision {
