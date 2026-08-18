@@ -24,9 +24,7 @@ pub mod session;
 pub mod skills;
 pub mod stream;
 
-pub use android_browser::{
-    AndroidBrowserSnapshotV1 as _DeprecatedAndroidBrowserSnapshotV1,
-};
+pub use android_browser::{BrowserRequest, BrowserSnapshotV1, ANDROID_BROWSER_SCHEMA_V1};
 pub use command::{execute, CommandRequest, CommandResponse};
 pub use error::{AndroidError, Result};
 pub use model::{ActionReceiptV1, ActionV1, SessionV1, SnapshotV1};
