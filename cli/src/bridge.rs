@@ -397,7 +397,6 @@ pub fn setup(serial: &str, store: &SessionStore, apk: Option<&Path>) -> Result<B
     };
     let path = apk.to_string_lossy().to_string();
     adb.app_install(&[path])?;
-    wait_for_accessibility_registration(&adb)?;
     let token = create_token()?;
     write_token(store, serial, &token)?;
     let device_token_command = token_write_command(&token);
@@ -406,6 +405,10 @@ pub fn setup(serial: &str, store: &SessionStore, apk: Option<&Path>) -> Result<B
     // shell split the script at `;`, dropping the app UID boundary.
     adb.shell(&[&device_token_command])?;
     enable(&adb)?;
+    // A freshly installed companion is package-stopped until Android enables
+    // its Accessibility service. Waiting before this point can never succeed
+    // on current Android images, even though its manifest resolver is valid.
+    wait_for_accessibility_registration(&adb)?;
     status(serial, store)
 }
 
@@ -637,7 +640,7 @@ fn token_write_command(token: &str) -> String {
 }
 
 fn service_matches(value: &str) -> bool {
-    value == SERVICE || value == FULL_SERVICE
+    matches!(value.trim(), SERVICE | FULL_SERVICE)
 }
 
 fn wait_for_accessibility_registration(adb: &AdbBackend) -> Result<()> {
@@ -686,5 +689,6 @@ mod tests {
     fn accessibility_component_accepts_android_short_and_full_forms() {
         assert!(service_matches(SERVICE));
         assert!(service_matches(FULL_SERVICE));
+        assert!(service_matches(&format!("{SERVICE}\r\n")));
     }
 }
