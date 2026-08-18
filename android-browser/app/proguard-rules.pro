@@ -1,0 +1,2 @@
+-keep class dev.tempera.android.browser.** { *; }
+-dontwarn org.json.**
