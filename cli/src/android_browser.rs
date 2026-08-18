@@ -85,7 +85,9 @@ pub fn doctor(request: &BrowserRequest, cdp_socket: Option<&str>) -> Result<Valu
     let backend = AdbBackend::new(serial.clone())?;
     backend.ensure_ready()?;
     let package_path = backend.shell(&["pm", "path", &request.package])?;
-    let installed = package_path.lines().any(|line| line.starts_with("package:"));
+    let installed = package_path
+        .lines()
+        .any(|line| line.starts_with("package:"));
     let cdp = match targets(&serial, cdp_socket.unwrap_or(DEFAULT_CDP_SOCKET)) {
         Ok(targets) => json!({"reachable": true, "targets": targets}),
         Err(error) => json!({"reachable": false, "detail": error.to_string()}),
@@ -101,11 +103,7 @@ pub fn doctor(request: &BrowserRequest, cdp_socket: Option<&str>) -> Result<Valu
     }))
 }
 
-pub fn open(
-    request: &BrowserRequest,
-    url: &str,
-    timeout_ms: u64,
-) -> Result<Value> {
+pub fn open(request: &BrowserRequest, url: &str, timeout_ms: u64) -> Result<Value> {
     validate_package(&request.package)?;
     validate_url(url)?;
     if !(250..=60_000).contains(&timeout_ms) {
@@ -182,9 +180,8 @@ pub fn snapshot(request: &BrowserRequest) -> Result<BrowserSnapshotV1> {
     })
 }
 
-/// Execute one guarded browser action and return the resulting semantic state.
-/// This fuses action + observation into one host invocation and avoids a second
-/// CLI startup in agent loops.
+/// Compatibility and ADB fallback for one guarded browser action. The native
+/// bridge hot path lives in `android_browser_fast` and uses fused act-observe.
 pub fn step(request: &BrowserRequest, action: ActionV1) -> Result<Value> {
     if action.expected_revision.is_none() || action.expected_state_hash.is_none() {
         return Err(AndroidError::InvalidInput(
@@ -204,11 +201,9 @@ pub fn step(request: &BrowserRequest, action: ActionV1) -> Result<Value> {
     let started = Instant::now();
     let response = execute(base_command(request, Command::Action { action }));
     if !response.ok {
-        return Err(AndroidError::Backend(
-            response
-                .error
-                .unwrap_or_else(|| "Android browser action failed".to_string()),
-        ));
+        return Err(AndroidError::Backend(response.error.unwrap_or_else(|| {
+            "Android browser action failed".to_string()
+        })));
     }
     let receipt: ActionReceiptV1 = serde_json::from_value(response.result.unwrap_or(Value::Null))?;
     let after = snapshot(request)?;
@@ -282,11 +277,9 @@ pub fn targets(serial: &str, socket: &str) -> Result<Value> {
 fn observe(request: &BrowserRequest) -> Result<SnapshotV1> {
     let response = execute(base_command(request, Command::Snapshot { full: false }));
     if !response.ok {
-        return Err(AndroidError::Backend(
-            response
-                .error
-                .unwrap_or_else(|| "Android browser observation failed".to_string()),
-        ));
+        return Err(AndroidError::Backend(response.error.unwrap_or_else(|| {
+            "Android browser observation failed".to_string()
+        })));
     }
     serde_json::from_value(response.result.unwrap_or(Value::Null)).map_err(AndroidError::from)
 }
@@ -312,7 +305,10 @@ fn compact_nodes(nodes: &[NodeV1]) -> Vec<NodeV1> {
                     || node.editable
                     || node.scrollable
                     || !node.label.trim().is_empty()
-                    || node.text.as_deref().is_some_and(|text| !text.trim().is_empty()))
+                    || node
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty()))
         })
         .take(MAX_BROWSER_NODES)
         .cloned()
@@ -341,7 +337,10 @@ fn extract_title_hint(nodes: &[NodeV1], url: Option<&str>) -> Option<String> {
         (!label.is_empty()
             && Some(label) != url
             && !node.editable
-            && matches!(node.role.as_str(), "android.widget.TextView" | "text" | "heading"))
+            && matches!(
+                node.role.as_str(),
+                "android.widget.TextView" | "text" | "heading"
+            ))
         .then(|| label.to_string())
     })
 }
@@ -433,9 +432,7 @@ fn http_get(port: u16, path: &str) -> Result<Vec<u8>> {
     )?;
     stream.flush()?;
     let mut response = Vec::new();
-    stream
-        .take(MAX_HTTP_BYTES + 1)
-        .read_to_end(&mut response)?;
+    stream.take(MAX_HTTP_BYTES + 1).read_to_end(&mut response)?;
     if response.len() as u64 > MAX_HTTP_BYTES {
         return Err(AndroidError::Backend(
             "Chrome DevTools target response exceeded 4 MiB".to_string(),
@@ -444,16 +441,25 @@ fn http_get(port: u16, path: &str) -> Result<Vec<u8>> {
     let header_end = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| AndroidError::Backend("Invalid Chrome DevTools HTTP response".to_string()))?;
+        .ok_or_else(|| {
+            AndroidError::Backend("Invalid Chrome DevTools HTTP response".to_string())
+        })?;
     let header = String::from_utf8_lossy(&response[..header_end]);
-    if !header.lines().next().is_some_and(|line| line.contains(" 200 ")) {
+    if !header
+        .lines()
+        .next()
+        .is_some_and(|line| line.contains(" 200 "))
+    {
         return Err(AndroidError::Backend(format!(
             "Chrome DevTools target endpoint failed: {}",
             header.lines().next().unwrap_or("unknown response")
         )));
     }
     let body = response[header_end + 4..].to_vec();
-    if header.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    if header
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         decode_chunked(&body)
     } else {
         Ok(body)
