@@ -6,16 +6,21 @@ on:
       - diag/use-authority-exact-validation
     paths:
       - .github/workflows/validate-use-authority-exact.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/validate-use-authority-exact.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: validate-use-authority-exact-${{ github.ref }}
+  group: validate-use-authority-exact-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
   validate:
+    if: github.event_name == 'push' || github.head_ref == 'diag/use-authority-exact-validation'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
