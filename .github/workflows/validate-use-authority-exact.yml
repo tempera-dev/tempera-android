@@ -24,39 +24,146 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      USE_SOURCE_SHA: c4bdb91c445b392040469e1377f65c4711bcd882
-      PATCH_SHA256: 376ceab819345c26e45d4f2740dce43e41d5552fa959aeb0880ff4e77720e2c5
-      PATCH_GZIP_SHA256: 404c550cf0f188fc57fcf471ec49e64df28508024a25101496b59270341e435f
+      SOURCE_REVISION: 2911867d29001f5ae98b03fd569739476e963d8c
+      SOURCE_ARCHIVE_SHA256: 78da888ab39b28b8c016d0ac10f1baa22406f087b1b86e80aa45d6c22443024f
+      STAGED_PATCH_SHA256: 376ceab819345c26e45d4f2740dce43e41d5552fa959aeb0880ff4e77720e2c5
+      STAGED_PATCH_GZIP_SHA256: 404c550cf0f188fc57fcf471ec49e64df28508024a25101496b59270341e435f
+      RESULT_CERT_SHA256: b6a88653ee037ac5245888dda878fdbf13be00b25641c330579027b934b9b19b
       CARGO_INCREMENTAL: '0'
-      CARGO_TERM_COLOR: always
+      CARGO_TERM_COLOR: never
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout immutable Tempera Use child
-        uses: actions/checkout@v4
-        with:
-          repository: tempera-dev/tempera-use
-          ref: ${{ env.USE_SOURCE_SHA }}
-          path: use
-          fetch-depth: 1
-          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt,clippy
-      - name: Verify and apply the exact staged product patch
+      - name: Create an ephemeral encrypted-input boundary
         shell: bash
-        working-directory: use
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$USE_SOURCE_SHA"
-          cat .github/agent/use-authority-*.b64 > /tmp/use-authority.patch.gz.b64
-          base64 --decode /tmp/use-authority.patch.gz.b64 > /tmp/use-authority.patch.gz
-          printf '%s  %s\n' "$PATCH_GZIP_SHA256" /tmp/use-authority.patch.gz | sha256sum --check -
-          gzip --decompress --stdout /tmp/use-authority.patch.gz > /tmp/use-authority.patch
-          printf '%s  %s\n' "$PATCH_SHA256" /tmp/use-authority.patch | sha256sum --check -
-          git apply --check /tmp/use-authority.patch
-          git apply /tmp/use-authority.patch
-          cargo fmt --all
-          git diff --check
-          python3 - <<'PY'
+          install -d -m 700 /tmp/use-validation
+          openssl genpkey \
+            -algorithm RSA \
+            -pkeyopt rsa_keygen_bits:3072 \
+            -out /tmp/use-validation/input-private.pem \
+            >/dev/null 2>&1
+          chmod 600 /tmp/use-validation/input-private.pem
+          openssl req \
+            -new -x509 \
+            -key /tmp/use-validation/input-private.pem \
+            -subj "/CN=tempera-use-validation-${GITHUB_RUN_ID}" \
+            -days 1 \
+            -out /tmp/use-validation/input-cert.pem \
+            >/dev/null 2>&1
+          printf 'USE_VALIDATION_ENVELOPE_PREFIX=.github/agent/use-authority-envelope-%s\n' "$GITHUB_RUN_ID"
+          printf 'USE_VALIDATION_CERT_B64='
+          base64 -w0 /tmp/use-validation/input-cert.pem
+          printf '\n'
+      - name: Receive the CMS-encrypted immutable source envelope
+        id: receive
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix=".github/agent/use-authority-envelope-${GITHUB_RUN_ID}"
+          ref='diag/use-authority-exact-validation'
+          ready_path="${prefix}.ready"
+          for attempt in $(seq 1 240); do
+            if gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/contents/${ready_path}?ref=${ref}" \
+              --jq .content \
+              2>/dev/null \
+              | tr -d '\n' \
+              | base64 --decode \
+              > /tmp/use-validation/envelope.ready; then
+              break
+            fi
+            if [ "$attempt" -eq 240 ]; then
+              echo 'encrypted validation envelope was not published' >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          chunks="$(sed -n 's/^chunks=//p' /tmp/use-validation/envelope.ready)"
+          expected="$(sed -n 's/^cms_sha256=//p' /tmp/use-validation/envelope.ready)"
+          case "$chunks" in
+            ''|*[!0-9]*) echo 'invalid encrypted-envelope chunk count' >&2; exit 1 ;;
+          esac
+          test "$chunks" -ge 1
+          test "$chunks" -le 16
+          : > /tmp/use-validation/envelope.cms.b64
+          for index in $(seq 0 $((chunks - 1))); do
+            suffix="$(printf '%02d' "$index")"
+            path="${prefix}-${suffix}.b64"
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=${ref}" \
+              --jq .content \
+              | tr -d '\n' \
+              | base64 --decode \
+              >> /tmp/use-validation/envelope.cms.b64
+          done
+          base64 --decode \
+            /tmp/use-validation/envelope.cms.b64 \
+            > /tmp/use-validation/envelope.cms
+          printf '%s  %s\n' \
+            "$expected" \
+            /tmp/use-validation/envelope.cms \
+            | sha256sum --check -
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+      - name: Decrypt and validate private product bytes without public source logs
+        id: private_validation
+        shell: bash
+        run: |
+          set -uo pipefail
+          private_log=/tmp/use-validation/private-validation.log
+          status_file=/tmp/use-validation/status
+          : > "$private_log"
+          status=0
+          {
+            set -e
+            openssl cms \
+              -decrypt \
+              -binary \
+              -inform DER \
+              -in /tmp/use-validation/envelope.cms \
+              -recip /tmp/use-validation/input-cert.pem \
+              -inkey /tmp/use-validation/input-private.pem \
+              -out /tmp/use-validation/input.tar
+            install -d -m 700 /tmp/use-validation/input /tmp/use-validation/use
+            tar -xf /tmp/use-validation/input.tar -C /tmp/use-validation/input
+            printf '%s  %s\n' \
+              "$SOURCE_ARCHIVE_SHA256" \
+              /tmp/use-validation/input/source.tar.xz \
+              | sha256sum --check -
+            printf '%s  %s\n' \
+              "$STAGED_PATCH_GZIP_SHA256" \
+              /tmp/use-validation/input/use-authority.patch.gz \
+              | sha256sum --check -
+            printf '%s  %s\n' \
+              "$RESULT_CERT_SHA256" \
+              /tmp/use-validation/input/result-cert.pem \
+              | sha256sum --check -
+            tar -xJf \
+              /tmp/use-validation/input/source.tar.xz \
+              -C /tmp/use-validation/use
+            cd /tmp/use-validation/use
+            git init --quiet
+            git config user.name validation-baseline
+            git config user.email validation-baseline@invalid
+            git add -A
+            git commit --quiet -m "baseline ${SOURCE_REVISION}"
+            gzip --decompress --stdout \
+              /tmp/use-validation/input/use-authority.patch.gz \
+              > /tmp/use-validation/use-authority.patch
+            printf '%s  %s\n' \
+              "$STAGED_PATCH_SHA256" \
+              /tmp/use-validation/use-authority.patch \
+              | sha256sum --check -
+            git apply --check /tmp/use-validation/use-authority.patch
+            git apply /tmp/use-validation/use-authority.patch
+            cargo fmt --all
+            git diff --check
+            python3 - <<'PY'
           import subprocess
           paths = subprocess.check_output(
               ['git', 'diff', '--name-only'], text=True
@@ -70,63 +177,81 @@ jobs:
           if 'Cargo.lock' not in paths or 'crates/orchestrator/src/lib.rs' not in paths:
               raise SystemExit(f'expected product files missing: {paths}')
           PY
-      - name: Locked orchestrator all-targets compile
-        working-directory: use
-        run: cargo check --locked -p tempera-use-orchestrator --all-targets
-      - name: Explicit session and registry authority
-        working-directory: use
-        run: cargo test --locked -p tempera-use-orchestrator --test authority_registry
-      - name: Per-surface serialization and close barriers
-        working-directory: use
-        run: cargo test --locked -p tempera-use-orchestrator --test surface_lanes
-      - name: Absolute deadline boundaries
-        working-directory: use
-        run: cargo test --locked -p tempera-use-orchestrator --test deadlines
-      - name: Durable intent, commit, and restart recovery
-        working-directory: use
-        run: cargo test --locked -p tempera-use-orchestrator --test durable_effects
-      - name: Lifecycle and adversarial executor boundaries
-        working-directory: use
-        run: |
-          cargo test --locked -p tempera-use-orchestrator --test session_lifecycle
-          cargo test --locked -p tempera-use-orchestrator --test malicious_executor
-      - name: Complete orchestrator suite
-        working-directory: use
-        run: cargo test --locked -p tempera-use-orchestrator
-      - name: Locked workspace compile
-        working-directory: use
-        run: cargo check --locked --workspace --all-targets
-      - name: Strict workspace Clippy
-        working-directory: use
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-      - name: Complete workspace tests
-        working-directory: use
-        run: cargo test --locked --workspace
-      - name: Package exact validated product bytes and receipt
+            cargo check --locked -p tempera-use-orchestrator --all-targets
+            cargo test --locked -p tempera-use-orchestrator --test authority_registry
+            cargo test --locked -p tempera-use-orchestrator --test surface_lanes
+            cargo test --locked -p tempera-use-orchestrator --test deadlines
+            cargo test --locked -p tempera-use-orchestrator --test durable_effects
+            cargo test --locked -p tempera-use-orchestrator --test session_lifecycle
+            cargo test --locked -p tempera-use-orchestrator --test malicious_executor
+            cargo test --locked -p tempera-use-orchestrator
+            cargo check --locked --workspace --all-targets
+            cargo clippy --locked --workspace --all-targets -- \
+              -D warnings \
+              -D clippy::unwrap_used \
+              -D clippy::expect_used
+            cargo test --locked --workspace
+            cargo fmt --all --check
+            git diff --check
+          } >> "$private_log" 2>&1 || status=$?
+          printf '%s\n' "$status" > "$status_file"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -eq 0 ]; then
+            echo 'private exact-source validation completed successfully'
+          else
+            echo 'private exact-source validation failed; encrypted diagnostics will be returned'
+          fi
+      - name: Encrypt the exact result and private diagnostics for the coordinator
+        if: always() && steps.receive.outcome == 'success'
         shell: bash
-        working-directory: use
         run: |
           set -euo pipefail
-          cargo fmt --all --check
-          git diff --check
-          mkdir -p /tmp/use-authority-validated/crates
-          cp Cargo.lock /tmp/use-authority-validated/Cargo.lock
-          cp -R crates/orchestrator /tmp/use-authority-validated/crates/orchestrator
-          git diff --binary -- Cargo.lock crates/orchestrator > /tmp/use-authority-validated/use-authority.patch
-          sha256sum /tmp/use-authority-validated/use-authority.patch > /tmp/use-authority-validated/use-authority.patch.sha256
+          install -d -m 700 /tmp/use-validation/result
+          status="$(cat /tmp/use-validation/status 2>/dev/null || printf '125')"
+          cp /tmp/use-validation/private-validation.log \
+            /tmp/use-validation/result/private-validation.log
+          printf 'status=%s\n' "$status" \
+            > /tmp/use-validation/result/receipt.txt
           {
-            printf 'source_sha=%s\n' "$USE_SOURCE_SHA"
-            printf 'staged_patch_sha256=%s\n' "$PATCH_SHA256"
-            printf 'validated_patch_sha256='
-            sha256sum /tmp/use-authority-validated/use-authority.patch | cut -d' ' -f1
+            printf 'source_revision=%s\n' "$SOURCE_REVISION"
+            printf 'source_archive_sha256=%s\n' "$SOURCE_ARCHIVE_SHA256"
+            printf 'staged_patch_sha256=%s\n' "$STAGED_PATCH_SHA256"
             rustc --version --verbose
             cargo --version --verbose
-            printf 'changed_files:\n'
-            git diff --name-only -- Cargo.lock crates/orchestrator
-          } > /tmp/use-authority-validated/receipt.txt
+          } >> /tmp/use-validation/result/receipt.txt
+          if [ "$status" -eq 0 ]; then
+            cd /tmp/use-validation/use
+            git diff --binary -- Cargo.lock crates/orchestrator \
+              > /tmp/use-validation/result/validated.patch
+            sha256sum /tmp/use-validation/result/validated.patch \
+              > /tmp/use-validation/result/validated.patch.sha256
+          fi
+          tar -cf \
+            /tmp/use-validation/result.tar \
+            -C /tmp/use-validation/result .
+          openssl cms \
+            -encrypt \
+            -binary \
+            -aes-256-cbc \
+            -in /tmp/use-validation/result.tar \
+            -outform DER \
+            -out /tmp/use-validation/validated-result.cms \
+            /tmp/use-validation/input/result-cert.pem
+          sha256sum /tmp/use-validation/validated-result.cms \
+            > /tmp/use-validation/validated-result.cms.sha256
       - uses: actions/upload-artifact@v4
+        if: always() && steps.receive.outcome == 'success'
         with:
-          name: use-authority-validated-${{ env.USE_SOURCE_SHA }}
-          path: /tmp/use-authority-validated
+          name: encrypted-use-authority-result-${{ github.run_id }}
+          path: |
+            /tmp/use-validation/validated-result.cms
+            /tmp/use-validation/validated-result.cms.sha256
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
+      - name: Enforce the private validation result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(cat /tmp/use-validation/status 2>/dev/null || printf '125')"
+          test "$status" -eq 0
