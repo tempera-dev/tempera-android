@@ -398,7 +398,10 @@ pub fn setup(serial: &str, store: &SessionStore, apk: Option<&Path>) -> Result<B
     let token = create_token()?;
     write_token(store, serial, &token)?;
     let device_token_command = token_write_command(&token);
-    adb.shell(&["run-as", PACKAGE, "sh", "-c", &device_token_command])?;
+    // ADB preserves a single command argument as one device-shell payload.
+    // Passing each `run-as ... sh -c` argument separately lets its outer
+    // shell split the script at `;`, dropping the app UID boundary.
+    adb.shell(&[&device_token_command])?;
     enable(&adb)?;
     status(serial, store)
 }
@@ -623,12 +626,10 @@ fn create_token() -> Result<String> {
 fn token_write_command(token: &str) -> String {
     // `getFilesDir()` is created lazily by Android. Provision it before the
     // service first starts, while keeping the token private to the app UID.
-    // `adb shell` flattens nested `run-as ... sh -c` arguments, so neither
-    // `$HOME` nor a relative directory has a reliable meaning here. `/data/data`
-    // is Android's stable alias for the primary app-data directory; `run-as`
-    // confines this write to the companion UID.
+    // The random token is hex and PACKAGE is a compile-time package name, so
+    // neither can terminate the single-quoted inner command.
     format!(
-        "umask 077; mkdir -p /data/data/{PACKAGE}/files; printf %s {token} > /data/data/{PACKAGE}/files/bridge.token"
+        "run-as {PACKAGE} sh -c 'umask 077; mkdir -p files; printf %s {token} > files/bridge.token'"
     )
 }
 
@@ -653,7 +654,7 @@ mod tests {
     fn token_provisioning_creates_the_private_files_directory() {
         assert_eq!(
             token_write_command("abcdef"),
-            "umask 077; mkdir -p /data/data/dev.tempera.android.bridge/files; printf %s abcdef > /data/data/dev.tempera.android.bridge/files/bridge.token"
+            "run-as dev.tempera.android.bridge sh -c 'umask 077; mkdir -p files; printf %s abcdef > files/bridge.token'"
         );
     }
 }
