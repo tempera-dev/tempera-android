@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tempera-dev/tempera-android/blob/main/tempera-android.schema.json",
+  "title": "Tempera Android configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": "tempera.android.config/v1"},
+    "defaultSerial": {"type": "string", "minLength": 1},
+    "transport": {"enum": ["auto", "bridge", "adb", "appium"]},
+    "appium": {"type": "object", "additionalProperties": false, "properties": {"url": {"type": "string", "format": "uri"}, "capabilities": {"type": "object"}}},
+    "dashboard": {"type": "object", "additionalProperties": false, "properties": {"listen": {"type": "string", "pattern": "^(127\\.0\\.0\\.1|localhost):[0-9]{1,5}$"}}}
+  }
+}

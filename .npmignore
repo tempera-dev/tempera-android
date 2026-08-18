@@ -1,0 +1,7 @@
+*
+!bin/
+!native/
+!README.md
+!LICENSE
+!NOTICE
+!tempera-android.schema.json

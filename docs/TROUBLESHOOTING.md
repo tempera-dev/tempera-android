@@ -9,36 +9,30 @@ brew install --cask temurin@21
 export JAVA_HOME="$(/usr/libexec/java_home -v 21)"
 ```
 
-Then rerun `./scripts/bootstrap-macos.sh`.
+Set `ANDROID_SDK_ROOT` to the official command-line-tools installation and rerun `tempera-android doctor`.
 
-## No Play Store image appears for API 37
+## A requested system image is unavailable
 
-List what the current SDK repository exposes:
-
-```bash
-android-sim images
-```
-
-Then create a supported stable fallback explicitly:
+Use a supported profile and API explicitly:
 
 ```bash
-android-sim create --name android-sim-play --profile play --api 36
+tempera-android install --profile google --api 36
+tempera-android device create --name tempera-google --profile google --api 36
 ```
 
-The CLI already tries API 37, then 36, then 35 when `--api` is omitted.
+The product invokes `sdkmanager`, `avdmanager`, `emulator`, and `adb` directly; it does not depend on the newer `android` CLI.
 
 ## The emulator boots but the internet does not work
 
 ```bash
-android-sim network status
-android-sim network wifi on
+tempera-android --serial emulator-5554 network --json
 ```
 
-Try explicit DNS on a cold boot:
+Restart the managed emulator with a cold boot:
 
 ```bash
-android-sim stop
-android-sim start android-sim-play --cold --dns 1.1.1.1,8.8.8.8
+tempera-android --serial emulator-5554 device stop
+tempera-android device start tempera-google --cold --headless
 ```
 
 A corporate firewall, VPN, proxy, or DNS filter on the Mac can also affect the
@@ -52,8 +46,8 @@ Mac server on port 8000 at `http://10.0.2.2:8000`.
 
 ## An APK fails with `INSTALL_FAILED_NO_MATCHING_ABIS`
 
-The M2 environment runs an ARM64 (`arm64-v8a`) Android image. Install an APK that
-contains ARM64 native libraries. An x86-only APK is not compatible.
+Install an APK containing a native ABI matching the target image. Apple Silicon
+managed emulators use `arm64-v8a`; typical Linux CI emulators use `x86_64`.
 
 ## A banking, DRM, or game app refuses to run
 
@@ -62,12 +56,13 @@ an emulator and does not become physical hardware. Apps may require hardware
 attestation, Widevine levels, telephony, NFC secure elements, or vendor-specific
 components unavailable in an AVD. This project does not bypass those checks.
 
-## Resetting identity removed all apps
+## Resetting a managed emulator removed all apps
 
-That is expected. A factory reset replaces the writable user-data state. Use a
-separate identity instead when preserving the original environment matters:
+That is expected. Reset is destructive and only applies to a named,
+Tempera-managed AVD. Use a separate managed device when preserving the original
+environment matters:
 
 ```bash
-android-sim new-identity android-sim-play
-android-sim list
+tempera-android device create --name tempera-google-2 --profile google --api 36
+tempera-android device list --json
 ```

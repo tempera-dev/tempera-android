@@ -1,5 +1,5 @@
-"""Reproducible Android Emulator environments for Apple Silicon Macs."""
+"""Reproducible Android Emulator environments and computer-use agents."""
 
 __all__ = ["__version__"]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

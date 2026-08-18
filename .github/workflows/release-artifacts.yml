@@ -1,0 +1,124 @@
+name: release artifacts
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "cli/**"
+      - "bin/**"
+      - ".github/workflows/release-artifacts.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to stamp in the artifact name (for example 0.4.0-alpha.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            binary: target/release/tempera-android
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            binary: target/release/tempera-android
+          # macos-13 is retired; macos-15-intel is GitHub's supported x64
+          # macOS image and preserves the release architecture contract.
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            binary: target/release/tempera-android
+          - os: macos-15
+            platform: macos
+            arch: arm64
+            binary: target/release/tempera-android
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            binary: target/release/tempera-android.exe
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+            binary: target/release/tempera-android.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - run: cargo build --locked --release --workspace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  companion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: bash scripts/build-companion.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-bridge-apk
+          path: companion/build/tempera-android-bridge.apk
+          if-no-files-found: error
+
+  npm-package:
+    name: installable npm package
+    needs: [native, companion]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-*
+          path: artifacts
+      - name: Assemble universal native layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native/linux-x64 native/linux-arm64 native/macos-x64 native/macos-arm64 native/windows-x64 native/windows-arm64
+          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-linux-x64/tempera-android native/linux-x64/tempera-android
+          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-linux-arm64/tempera-android native/linux-arm64/tempera-android
+          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-macos-x64/tempera-android native/macos-x64/tempera-android
+          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-macos-arm64/tempera-android native/macos-arm64/tempera-android
+          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-x64/tempera-android.exe native/windows-x64/tempera-android.exe
+          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-arm64/tempera-android.exe native/windows-arm64/tempera-android.exe
+          chmod +x native/linux-*/tempera-android native/macos-*/tempera-android
+      - name: Pack npm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          npm pack --pack-destination dist
+      - name: Verify package contents and Linux install
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz > package-contents.txt
+          grep -qx 'package/native/linux-x64/tempera-android' package-contents.txt
+          grep -qx 'package/native/macos-arm64/tempera-android' package-contents.txt
+          grep -qx 'package/native/windows-x64/tempera-android.exe' package-contents.txt
+          npm install --prefix "$PWD/smoke" "$PWD/dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz"
+          "$PWD/smoke/node_modules/.bin/tempera-android" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-npm-package
+          path: dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz
+          if-no-files-found: error
