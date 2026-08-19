@@ -125,6 +125,7 @@ final class ControlServer implements Closeable {
             : new JSONObject(new String(request.body, StandardCharsets.UTF_8));
         return switch (request.path) {
             case "/v1/navigate" -> runtime.navigate(body.optString("url", ""));
+            case "/v1/snapshot-delta" -> runtime.snapshotDelta(body);
             case "/v1/action" -> runtime.action(body);
             case "/v1/act-observe" -> runtime.actObserve(body);
             case "/v1/wait" -> runtime.waitFor(body);
