@@ -1,0 +1,219 @@
+name: Harden daemon zeroization once
+
+on:
+  push:
+    branches:
+      - agent/tempera-use-authenticated-daemon
+    paths:
+      - .github/workflows/harden-daemon-zeroization-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harden-daemon-zeroization-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      EXPECTED_HEAD: 830a4174f4910696b0d2164e2bb98b8c7e129ded
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/tempera-use-authenticated-daemon
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: rustfmt,clippy
+      - name: Verify and apply bounded security repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def one(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one target, found {count}")
+              path.write_text(text.replace(old, new, 1))
+
+          manifest = Path("cli/Cargo.toml")
+          one(
+              manifest,
+              'ureq = { version = "2.12", features = ["json"] }\n',
+              'ureq = { version = "2.12", features = ["json"] }\n'
+              'zeroize = "=1.9.0"\n',
+              "zeroize dependency",
+          )
+
+          auth = Path("cli/src/daemon_auth.rs")
+          one(
+              auth,
+              "use std::env;\n",
+              "use std::env;\nuse zeroize::{Zeroize, Zeroizing};\n",
+              "zeroize imports",
+          )
+          one(
+              auth,
+              "    token: Box<[u8]>,\n",
+              "    token: Zeroizing<Vec<u8>>,\n",
+              "retained token wrapper",
+          )
+          one(
+              auth,
+              '''    /// Decode one owned request and erase the complete wire frame on every
+              /// success or rejection path. `Vec::clear` alone would retain the token in
+              /// reusable capacity until that allocation was overwritten or released.
+              pub(crate) fn authenticate_frame(&self, frame: &mut [u8]) -> Result<CommandRequest> {
+                  let decoded = serde_json::from_slice::<AuthenticatedCommandRequest>(frame).map_err(|_| {
+                      AndroidError::InvalidInput("invalid authenticated daemon request".to_string())
+                  });
+                  frame.fill(0);
+                  let wire = decoded?;
+          
+                  let mut provided = wire.capability_token.into_bytes();
+                  let authenticated = constant_time_eq(&self.token, &provided);
+                  provided.fill(0);'''.replace('              ', ''),
+              '''    /// Decode one owned request and securely erase the complete wire frame on
+              /// every success or rejection path. RustCrypto zeroization uses volatile writes
+              /// and compiler fences rather than a dead-store-elidable ordinary fill.
+              pub(crate) fn authenticate_frame(&self, frame: &mut [u8]) -> Result<CommandRequest> {
+                  let decoded = serde_json::from_slice::<AuthenticatedCommandRequest>(frame).map_err(|_| {
+                      AndroidError::InvalidInput("invalid authenticated daemon request".to_string())
+                  });
+                  frame.zeroize();
+                  let wire = decoded?;
+          
+                  let provided = Zeroizing::new(wire.capability_token.into_bytes());
+                  let authenticated =
+                      constant_time_eq(self.token.as_slice(), provided.as_slice());'''.replace('              ', ''),
+              "request and token zeroization",
+          )
+          one(
+              auth,
+              '''impl Drop for DaemonAuthority {
+              fn drop(&mut self) {
+                  self.token.fill(0);
+              }
+          }
+          
+          '''.replace('          ', ''),
+              "",
+              "manual token drop",
+          )
+          one(
+              auth,
+              '''fn validate_token(token: String) -> Result<Box<[u8]>> {
+              let mut bytes = token.into_bytes();
+              if bytes.len() < MIN_TOKEN_BYTES
+                  || bytes.len() > MAX_TOKEN_BYTES
+                  || bytes
+                      .iter()
+                      .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+              {
+                  bytes.fill(0);
+                  return Err(AndroidError::InvalidInput(format!(
+                      "{TOKEN_ENV} must contain {MIN_TOKEN_BYTES}-{MAX_TOKEN_BYTES} non-whitespace bytes"
+                  )));
+              }
+              Ok(bytes.into_boxed_slice())
+          }'''.replace('          ', ''),
+              '''fn validate_token(token: String) -> Result<Zeroizing<Vec<u8>>> {
+              let bytes = Zeroizing::new(token.into_bytes());
+              if bytes.len() < MIN_TOKEN_BYTES
+                  || bytes.len() > MAX_TOKEN_BYTES
+                  || bytes
+                      .iter()
+                      .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+              {
+                  return Err(AndroidError::InvalidInput(format!(
+                      "{TOKEN_ENV} must contain {MIN_TOKEN_BYTES}-{MAX_TOKEN_BYTES} non-whitespace bytes"
+                  )));
+              }
+              Ok(bytes)
+          }'''.replace('          ', ''),
+              "validated token wrapper",
+          )
+
+          daemon = Path("cli/src/daemon.rs")
+          one(
+              daemon,
+              "use std::time::Duration;\n",
+              "use std::time::Duration;\nuse zeroize::{Zeroize, Zeroizing};\n",
+              "daemon zeroize imports",
+          )
+          one(
+              daemon,
+              "    let mut line = Vec::with_capacity(4096);\n",
+              "    let mut line = Zeroizing::new(Vec::with_capacity(MAX_DAEMON_LINE_BYTES));\n",
+              "fixed-capacity frame buffer",
+          )
+          text = daemon.read_text()
+          count = text.count("line.fill(0);")
+          if count != 5:
+              raise SystemExit(f"frame zeroization: expected five fills, found {count}")
+          text = text.replace("line.fill(0);", "line.zeroize();")
+          if text.count("authority.authenticate_frame(&mut line)") != 1:
+              raise SystemExit("authenticated frame call target changed")
+          text = text.replace(
+              "authority.authenticate_frame(&mut line)",
+              "authority.authenticate_frame(line.as_mut_slice())",
+              1,
+          )
+          text = text.replace(
+              "        assert!(line.len() <= MAX_DAEMON_LINE_BYTES);\n"
+              "        assert!(line.iter().all(|byte| *byte == 0));\n",
+              "        assert!(line.is_empty());\n",
+              1,
+          )
+          daemon.write_text(text)
+
+          docs = Path("docs/DAEMON_AUTH.md")
+          one(
+              docs,
+              "The request frame remains subject to the 256 KiB daemon frame limit. The daemon erases the complete mutable wire buffer after decoding on success and rejection paths; it also erases the provided token bytes after comparison and the retained token when the authority object is dropped.\n",
+              "The request frame remains subject to the 256 KiB daemon frame limit. Each active worker allocates that capacity before reading, so a request cannot leave token fragments in freed intermediate reallocations. The daemon uses RustCrypto `zeroize` 1.9.0, whose volatile writes and compiler fences cannot be optimized away, to erase the complete mutable wire buffer on accepted, rejected, malformed, oversized, timeout, and I/O-error paths. Provided and retained token buffers are wrapped for automatic secure erasure on drop.\n",
+              "operator zeroization contract",
+          )
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Resolve and pin the dependency graph
+        run: |
+          cargo check --workspace --all-targets
+          cargo check --locked --workspace --all-targets
+          cargo tree --locked -p tempera-android | grep -F 'zeroize v1.9.0'
+      - name: Strict lint, tests, and release build
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+          cargo build --locked --release --workspace
+      - name: Security source guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'Zeroizing<Vec<u8>>' cli/src/daemon_auth.rs
+          grep -F 'Vec::with_capacity(MAX_DAEMON_LINE_BYTES)' cli/src/daemon.rs
+          ! grep -F 'fill(0)' cli/src/daemon_auth.rs
+          ! grep -F 'line.fill(0)' cli/src/daemon.rs
+          cargo fmt --all --check
+          git diff --check
+      - name: Commit validated product and lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/harden-daemon-zeroization-once.yml
+          git add Cargo.lock cli/Cargo.toml cli/src/daemon.rs cli/src/daemon_auth.rs docs/DAEMON_AUTH.md
+          git diff --cached --check
+          git commit -m 'security: guarantee daemon token zeroization'
+          git push origin HEAD:agent/tempera-use-authenticated-daemon
