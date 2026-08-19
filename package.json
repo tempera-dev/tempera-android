@@ -1,12 +1,18 @@
 {
   "name": "tempera-android",
   "version": "0.4.0-alpha.1",
-  "description": "Cross-platform Android computer-use engine for AI agents",
+  "description": "Cross-platform Android computer-use engine and low-latency browser runtime for AI agents",
   "license": "Apache-2.0",
   "repository": {"type": "git", "url": "git+https://github.com/tempera-dev/tempera-android.git"},
-  "bin": {"tempera-android": "bin/tempera-android.js"},
-  "files": ["bin", "native", "README.md", "LICENSE", "NOTICE", "tempera-android.schema.json"],
+  "bin": {
+    "tempera-android": "bin/tempera-android.js",
+    "tempera-android-browser": "bin/tempera-android-browser.js",
+    "tempera-android-dom-browser": "bin/tempera-android-dom-browser.js"
+  },
+  "files": ["bin", "native", "assets", "README.md", "LICENSE", "NOTICE", "tempera-android.schema.json"],
   "engines": {"node": ">=18"},
-  "scripts": {"test": "node --check bin/tempera-android.js"},
-  "keywords": ["android", "adb", "accessibility", "mcp", "agents"]
+  "scripts": {
+    "test": "node --check bin/tempera-android.js && node --check bin/tempera-android-browser.js && node --check bin/tempera-android-dom-browser.js"
+  },
+  "keywords": ["android", "adb", "accessibility", "browser", "webview", "mcp", "agents"]
 }
