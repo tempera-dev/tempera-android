@@ -25,6 +25,8 @@ final class ControlServer implements Closeable {
     private static final int MAX_HEADER_LINE = 8 * 1024;
     private static final int MAX_HEADERS = 64;
     private static final int MAX_BODY = 1024 * 1024;
+    private static final int MAX_REQUESTS_PER_CONNECTION = 256;
+    private static final int CONNECTION_IDLE_TIMEOUT_MS = 15_000;
 
     private final BrowserRuntime runtime;
     private final String bearerToken;
@@ -59,7 +61,8 @@ final class ControlServer implements Closeable {
             try {
                 Socket socket = server.accept();
                 socket.setTcpNoDelay(true);
-                socket.setSoTimeout(10_000);
+                socket.setKeepAlive(true);
+                socket.setSoTimeout(CONNECTION_IDLE_TIMEOUT_MS);
                 clients.execute(() -> handle(socket));
             } catch (IOException error) {
                 if (running.get()) {
@@ -73,13 +76,32 @@ final class ControlServer implements Closeable {
         try (socket;
              BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
              BufferedOutputStream output = new BufferedOutputStream(socket.getOutputStream())) {
-            Request request = readRequest(input);
-            if (!constantTimeEquals("Bearer " + bearerToken, request.headers.get("authorization"))) {
-                write(output, 401, error("unauthorized"));
-                return;
+            for (int requestIndex = 0;
+                 requestIndex < MAX_REQUESTS_PER_CONNECTION && running.get();
+                 requestIndex += 1) {
+                final Request request;
+                try {
+                    request = readRequest(input);
+                } catch (IOException error) {
+                    // Normal peer close or idle expiry. The request is either absent or
+                    // incomplete, so never attempt to replay or synthesize a mutation.
+                    return;
+                }
+
+                if (!constantTimeEquals("Bearer " + bearerToken, request.headers.get("authorization"))) {
+                    write(output, 401, error("unauthorized"), false);
+                    return;
+                }
+
+                boolean requestedClose = "close".equalsIgnoreCase(request.headers.get("connection"));
+                boolean keepAlive = !requestedClose
+                    && requestIndex + 1 < MAX_REQUESTS_PER_CONNECTION;
+                JSONObject response = route(request);
+                write(output, 200, response, keepAlive);
+                if (!keepAlive) {
+                    return;
+                }
             }
-            JSONObject response = route(request);
-            write(output, 200, response);
         } catch (IllegalArgumentException error) {
             safeWrite(socket, 400, error(error.getMessage()));
         } catch (Exception error) {
@@ -174,7 +196,8 @@ final class ControlServer implements Closeable {
         throw new IllegalArgumentException("HTTP header line exceeds limit");
     }
 
-    private void write(OutputStream output, int status, JSONObject body) throws IOException {
+    private void write(OutputStream output, int status, JSONObject body, boolean keepAlive)
+        throws IOException {
         byte[] payload = body.toString().getBytes(StandardCharsets.UTF_8);
         String reason = switch (status) {
             case 200 -> "OK";
@@ -182,11 +205,17 @@ final class ControlServer implements Closeable {
             case 401 -> "Unauthorized";
             default -> "Internal Server Error";
         };
+        String connection = keepAlive ? "keep-alive" : "close";
+        String keepAliveHeader = keepAlive
+            ? "Keep-Alive: timeout=15, max=" + MAX_REQUESTS_PER_CONNECTION + "\r\n"
+            : "";
         String headers = "HTTP/1.1 " + status + " " + reason + "\r\n"
             + "Content-Type: application/json\r\n"
             + "Content-Length: " + payload.length + "\r\n"
             + "Cache-Control: no-store\r\n"
-            + "Connection: close\r\n\r\n";
+            + "Connection: " + connection + "\r\n"
+            + keepAliveHeader
+            + "\r\n";
         output.write(headers.getBytes(StandardCharsets.US_ASCII));
         output.write(payload);
         output.flush();
@@ -195,7 +224,7 @@ final class ControlServer implements Closeable {
     private void safeWrite(Socket socket, int status, JSONObject body) {
         try {
             if (!socket.isClosed()) {
-                write(socket.getOutputStream(), status, body);
+                write(socket.getOutputStream(), status, body, false);
             }
         } catch (IOException ignored) {
             // The peer may already be gone; never retry a control request.
