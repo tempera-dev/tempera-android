@@ -4,24 +4,7 @@
   "title": "Tempera Android mobile gauntlet device run plan",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "runId",
-    "suite",
-    "caseId",
-    "seed",
-    "task",
-    "serial",
-    "targetKind",
-    "transport",
-    "maxSteps",
-    "approveSensitive",
-    "networkPolicy",
-    "fixtureClass",
-    "fixtures",
-    "setup",
-    "bindings"
-  ],
+  "required": ["schemaVersion", "runId", "suite", "caseId", "seed", "task", "serial", "targetKind", "transport", "maxSteps", "approveSensitive", "networkPolicy", "fixtureClass", "fixtures", "setup", "bindings"],
   "properties": {
     "schemaVersion": {"const": "tempera.android.mobile-gauntlet-plan/v1"},
     "runId": {"type": "string", "pattern": "^[a-zA-Z0-9._-]{1,128}$"},
@@ -41,7 +24,7 @@
     "targetKind": {"const": "emulator"},
     "transport": {"enum": ["auto", "adb", "bridge"]},
     "model": {"type": "string", "minLength": 1, "maxLength": 256},
-    "maxSteps": {"type": "integer", "minimum": 1, "maximum": 256},
+    "maxSteps": {"type": "integer", "minimum": 1, "maximum": 40, "description": "Must match the compiled tempera-android run safety bound."},
     "approveSensitive": {"type": "boolean"},
     "networkPolicy": {"const": "deny"},
     "fixtureClass": {"const": "disposable-synthetic"},
@@ -71,10 +54,7 @@
         "launchUri": {"type": "string", "pattern": "^tempera-fixture://"},
         "settleMs": {"type": "integer", "minimum": 0, "maximum": 10000}
       },
-      "oneOf": [
-        {"required": ["launchPackage"]},
-        {"required": ["launchUri"]}
-      ]
+      "oneOf": [{"required": ["launchPackage"]}, {"required": ["launchUri"]}]
     },
     "bindings": {
       "type": "object",
