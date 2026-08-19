@@ -2,6 +2,8 @@ package dev.tempera.android.browser;
 
 import org.json.JSONObject;
 
+import java.util.Locale;
+
 final class DomProgram {
     private static final int MAX_NODES = 600;
     private static final String GLOBAL = "__temperaAgentRuntimeV1";
@@ -9,7 +11,7 @@ final class DomProgram {
     // Installed once per document. The resident runtime maintains a mutation-
     // driven semantic cache and stable per-element references so unchanged
     // snapshots avoid a full DOM/style scan.
-    private static final String CORE = """
+    private static final String CORE = String.format(Locale.ROOT, """
         const __tempera = (() => {
           const MAX_NODES = %d;
           const selector = [
@@ -268,7 +270,7 @@ final class DomProgram {
 
           return Object.freeze({version: 1, capture, captureDelta, act, scroll, markDirty});
         })();
-        """.formatted(MAX_NODES);
+        """, MAX_NODES);
 
     private DomProgram() {}
 
