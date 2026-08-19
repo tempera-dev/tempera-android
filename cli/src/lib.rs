@@ -14,6 +14,7 @@ pub mod bridge;
 pub mod command;
 pub mod config;
 pub mod daemon;
+mod daemon_auth;
 pub mod dashboard;
 pub mod error;
 pub mod evals;
