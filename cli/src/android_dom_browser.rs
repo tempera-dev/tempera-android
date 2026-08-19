@@ -8,8 +8,11 @@
 use crate::adb::AdbBackend;
 use crate::error::{AndroidError, Result};
 use serde_json::{json, Value};
+use std::env;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::Path;
+use std::thread;
 use std::time::{Duration, Instant};
 
 pub const PACKAGE: &str = "dev.tempera.android.browser";
@@ -33,8 +36,9 @@ impl DomBrowserClient {
     pub fn connect(serial: &str) -> Result<Self> {
         let adb = AdbBackend::new(serial)?;
         adb.ensure_ready()?;
+        ensure_browser_package(&adb)?;
         adb.shell(&["am", "start", "-n", &format!("{PACKAGE}/{ACTIVITY}")])?;
-        let token = read_token(&adb)?;
+        let token = wait_for_token(&adb)?;
         let host_port = unused_port()?;
         adb.forward(host_port, DEVICE_PORT)?;
         Ok(Self {
@@ -356,6 +360,39 @@ fn read_bounded_header_line(reader: &mut BufReader<TcpStream>) -> Result<String>
     }
     String::from_utf8(line)
         .map_err(|_| AndroidError::Backend("Android browser HTTP header is not UTF-8".to_string()))
+}
+
+fn ensure_browser_package(adb: &AdbBackend) -> Result<()> {
+    if adb.app_list(true)?.iter().any(|package| package == PACKAGE) {
+        return Ok(());
+    }
+    let apk = env::var("TEMPERA_ANDROID_BROWSER_APK").map_err(|_| {
+        AndroidError::Backend(
+            "Dedicated Android browser is not installed and TEMPERA_ANDROID_BROWSER_APK is not set"
+                .to_string(),
+        )
+    })?;
+    let path = Path::new(&apk);
+    if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("apk") {
+        return Err(AndroidError::InvalidInput(
+            "TEMPERA_ANDROID_BROWSER_APK must point to an existing .apk file".to_string(),
+        ));
+    }
+    adb.app_install(&[apk])
+}
+
+fn wait_for_token(adb: &AdbBackend) -> Result<String> {
+    let mut last_error = None;
+    for _ in 0..30 {
+        match read_token(adb) {
+            Ok(token) => return Ok(token),
+            Err(error) => last_error = Some(error),
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AndroidError::Backend("Dedicated Android browser did not become ready".to_string())
+    }))
 }
 
 fn read_token(adb: &AdbBackend) -> Result<String> {
