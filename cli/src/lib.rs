@@ -7,6 +7,7 @@
 pub mod adb;
 pub mod android_browser;
 pub mod android_browser_fast;
+pub mod android_dom_browser;
 pub mod appium;
 pub mod avd;
 pub mod benchmark;
