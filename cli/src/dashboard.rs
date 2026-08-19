@@ -5,20 +5,62 @@
 //! tab can never add latency or authority to the Android control hot path.
 
 use crate::error::{AndroidError, Result};
+use crate::model::SessionV1;
 use crate::session::SessionStore;
 use serde_json::json;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
+
+const DASHBOARD_WORKERS: usize = 4;
+const DASHBOARD_QUEUE: usize = 16;
+const DASHBOARD_MAX_SESSIONS: usize = 64;
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn serve(address: &str) -> Result<()> {
+    let address: SocketAddr = address.parse().map_err(|error| {
+        AndroidError::InvalidInput(format!("invalid dashboard address: {error}"))
+    })?;
+    if !address.ip().is_loopback() {
+        return Err(AndroidError::InvalidInput(
+            "the inspector dashboard is local-only and must bind to loopback".to_string(),
+        ));
+    }
     let listener = TcpListener::bind(address)?;
+    let (sender, receiver) = mpsc::sync_channel::<TcpStream>(DASHBOARD_QUEUE);
+    let receiver = Arc::new(Mutex::new(receiver));
+    for index in 0..DASHBOARD_WORKERS {
+        let receiver = Arc::clone(&receiver);
+        std::thread::Builder::new()
+            .name(format!("tempera-android-dashboard-{index}"))
+            .spawn(move || loop {
+                let stream = match receiver.lock() {
+                    Ok(receiver) => receiver.recv(),
+                    Err(_) => return,
+                };
+                match stream {
+                    Ok(stream) => {
+                        let _ = handle(stream);
+                    }
+                    Err(_) => return,
+                }
+            })
+            .map_err(AndroidError::Io)?;
+    }
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => {
-                std::thread::spawn(move || {
-                    let _ = handle(stream);
-                });
-            }
+            Ok(stream) => match sender.try_send(stream) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(mut stream)) => {
+                    let _ = write_busy(&mut stream);
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err(AndroidError::Backend(
+                        "dashboard worker pool unexpectedly stopped".to_string(),
+                    ));
+                }
+            },
             Err(error) => return Err(AndroidError::Io(error)),
         }
     }
@@ -26,6 +68,8 @@ pub fn serve(address: &str) -> Result<()> {
 }
 
 fn handle(mut stream: TcpStream) -> Result<()> {
+    stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
+    stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
     let mut request = [0_u8; 4096];
     let read = stream.read(&mut request)?;
     let request = String::from_utf8_lossy(&request[..read]);
@@ -37,14 +81,17 @@ fn handle(mut stream: TcpStream) -> Result<()> {
         .next()
         .unwrap_or("/");
     let (status, content_type, body): (&str, &str, Vec<u8>) = match path {
-        "/api/sessions" => (
-            "200 OK",
-            "application/json; charset=utf-8",
-            serde_json::to_vec_pretty(&SessionStore::from_environment()?.list()?)?,
-        ),
+        "/api/sessions" => {
+            let sessions = recent_sessions(SessionStore::from_environment()?.list()?);
+            (
+                "200 OK",
+                "application/json; charset=utf-8",
+                serde_json::to_vec_pretty(&sessions)?,
+            )
+        }
         "/api/state" => {
             let store = SessionStore::from_environment()?;
-            let sessions = store.list()?;
+            let sessions = recent_sessions(store.list()?);
             let details = sessions
                 .iter()
                 .map(|session| {
@@ -72,13 +119,22 @@ fn handle(mut stream: TcpStream) -> Result<()> {
         ),
         value if value.starts_with("/api/frame/") => {
             let id = value.trim_start_matches("/api/frame/");
-            match SessionStore::from_environment()?.frame(id)? {
-                Some(frame) => ("200 OK", "image/png", frame),
-                None => (
+            let store = SessionStore::from_environment()?;
+            if let Some(length) = store.frame_len(id)? {
+                write_headers(&mut stream, "200 OK", "image/png", length)?;
+                if !store.copy_frame_to(id, &mut stream)? {
+                    return Err(AndroidError::Backend(
+                        "inspector frame disappeared while it was being served".to_string(),
+                    ));
+                }
+                stream.flush()?;
+                return Ok(());
+            } else {
+                (
                     "404 Not Found",
                     "text/plain; charset=utf-8",
                     b"Frame not found".to_vec(),
-                ),
+                )
             }
         }
         _ => (
@@ -87,8 +143,46 @@ fn handle(mut stream: TcpStream) -> Result<()> {
             b"Not found".to_vec(),
         ),
     };
-    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n\r\n", body.len())?;
+    write_headers(&mut stream, status, content_type, body.len() as u64)?;
     stream.write_all(&body)?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn recent_sessions(mut sessions: Vec<SessionV1>) -> Vec<SessionV1> {
+    sessions.sort_by(|left, right| {
+        right
+            .updated_at_ms
+            .cmp(&left.updated_at_ms)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    sessions.truncate(DASHBOARD_MAX_SESSIONS);
+    sessions
+}
+
+fn write_headers(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    length: u64,
+) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {length}\r\nCache-Control: no-store\r\n\r\n"
+    )?;
+    Ok(())
+}
+
+fn write_busy(stream: &mut TcpStream) -> Result<()> {
+    stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+    let body = b"Dashboard is at its concurrent request limit; retry shortly";
+    write_headers(
+        stream,
+        "503 Service Unavailable",
+        "text/plain; charset=utf-8",
+        body.len() as u64,
+    )?;
+    stream.write_all(body)?;
     stream.flush()?;
     Ok(())
 }
@@ -99,3 +193,41 @@ const HTML: &str = r#"<!doctype html>
 <h1>Tempera Android Inspector</h1><p class="muted">Read-only persisted state. Refreshing this page never observes, screenshots, or controls a device.</p>
 <div class="layout"><section class="card"><h2>Sessions / devices</h2><div id="sessions"></div></section><section class="card"><h2>Last captured frame</h2><div id="frame" class="empty">No screenshot captured for this session.</div></section><section class="card"><h2>Selected semantic node</h2><pre id="selected" class="empty">Select a node in the semantic tree.</pre></section><section class="card wide"><h2>Semantic tree <span id="revision" class="pill"></span></h2><div id="tree" class="empty">No semantic snapshot captured.</div></section><section class="card"><h2>Action receipts</h2><pre id="receipts" class="empty">No receipts.</pre></section><section class="card"><h2>Logcat (last explicit read)</h2><pre id="logs" class="empty">No logs captured.</pre></section><section class="card"><h2>Network (last explicit read)</h2><pre id="network" class="empty">No network diagnostic captured.</pre></section><section class="card wide"><h2>Model / eval activity</h2><pre id="activity" class="empty">No model or evaluation activity.</pre></section></div>
 <script>let state=[],sessionId=null,nodeRef=null;const by=id=>document.getElementById(id),pretty=x=>JSON.stringify(x,null,2),empty=(id,msg)=>{by(id).textContent=msg;by(id).className='empty'},button=(className,title,detail,click)=>{const b=document.createElement('button'),s=document.createElement('small');b.className=className;b.append(document.createTextNode(title));s.textContent=detail;b.append(s);b.onclick=click;return b};function render(){const current=state.find(x=>x.session.sessionId===sessionId)||state[0];if(!current){empty('sessions','No sessions. Run snapshot or connect a target.');return}sessionId=current.session.sessionId;const sessions=by('sessions');sessions.replaceChildren(...state.map(x=>button(`session ${x.session.sessionId===sessionId?'active':''}`,x.session.sessionId,`${x.session.serial} · ${x.session.transport}`,()=>{sessionId=x.session.sessionId;nodeRef=null;render()})));const snapshot=current.snapshot;by('revision').textContent=snapshot?`r${snapshot.revision} · ${snapshot.stateHash.slice(0,16)}`:'no snapshot';const nodes=snapshot?.nodes||[],tree=by('tree');if(nodes.length){tree.className='';tree.replaceChildren(...nodes.map(n=>button(`node ${n.reference===nodeRef?'active':''}`,`${n.reference} ${n.role}: ${n.label||'(unlabeled)'}`,`${n.resourceId||''} · ${n.bounds.left},${n.bounds.top}–${n.bounds.right},${n.bounds.bottom}`,()=>{nodeRef=n.reference;render()})))}else{tree.className='empty';tree.textContent='No semantic snapshot captured.'}const node=nodes.find(n=>n.reference===nodeRef);if(node){by('selected').className='';by('selected').textContent=pretty(node)}else empty('selected','Select a node in the semantic tree.');by('receipts').className='';by('receipts').textContent=current.receipts?.length?pretty(current.receipts):'No receipts.';by('logs').className='';by('logs').textContent=current.logs?pretty(current.logs):'No logs captured.';by('network').className='';by('network').textContent=current.network?pretty(current.network):'No network diagnostic captured.';by('activity').className='';by('activity').textContent=current.activity?pretty(current.activity):'No model or evaluation activity.';const frame=by('frame');if(current.frameUrl){const image=document.createElement('img');image.alt='Last captured Android frame';image.src=`${current.frameUrl}?t=${Date.now()}`;frame.replaceChildren(image)}else{frame.className='empty';frame.textContent='No screenshot captured for this session.'}}async function refresh(){try{const response=await fetch('/api/state',{cache:'no-store'});state=await response.json();render()}catch(error){empty('sessions',`Dashboard read failed: ${error}`)}}refresh();setInterval(refresh,1500)</script></body></html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::CONTROL_SCHEMA_V1;
+
+    fn session(id: &str, updated_at_ms: u128) -> SessionV1 {
+        SessionV1 {
+            schema_version: CONTROL_SCHEMA_V1.to_string(),
+            session_id: id.to_string(),
+            serial: "emulator-5554".to_string(),
+            target_kind: "emulator".to_string(),
+            transport: "adb".to_string(),
+            created_at_ms: 1,
+            updated_at_ms,
+            last_revision: 0,
+            last_state_hash: None,
+            backend_session_id: None,
+        }
+    }
+
+    #[test]
+    fn dashboard_keeps_only_the_most_recent_sessions() {
+        let sessions = (0..(DASHBOARD_MAX_SESSIONS + 2))
+            .map(|index| session(&format!("s{index:03}"), index as u128))
+            .collect();
+        let recent = recent_sessions(sessions);
+        assert_eq!(recent.len(), DASHBOARD_MAX_SESSIONS);
+        assert_eq!(recent[0].session_id, "s065");
+        assert_eq!(recent.last().unwrap().session_id, "s002");
+    }
+
+    #[test]
+    fn dashboard_rejects_non_loopback_binds_before_listening() {
+        let error = serve("0.0.0.0:0").unwrap_err();
+        assert!(error.to_string().contains("loopback"));
+    }
+}

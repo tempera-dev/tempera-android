@@ -49,11 +49,14 @@ jobs:
         env:
           TEMPERA_ANDROID_BIN: target/release/tempera-android
           TEMPERA_ANDROID_HOME: ${{ runner.temp }}/tempera-android-proof
+          TEMPERA_ANDROID_EMULATOR_LOG: ${{ runner.temp }}/tempera-android-emulator.log
+          TEMPERA_PROOF_DATA_GB: 8
           TEMPERA_PROOF_SESSION: macos-${{ github.run_id }}
           PROOF_MODE: ${{ inputs.mode }}
           PROOF_SERIAL: ${{ inputs.serial }}
           PROOF_REQUIRE_BRIDGE: ${{ inputs.require_bridge }}
         run: |
+          set -o pipefail
           args=(--mode "$PROOF_MODE")
           if [[ "$PROOF_MODE" == "managed" ]]; then args+=(--name "tempera-proof-macos-${{ github.run_id }}"); else args+=(--serial "$PROOF_SERIAL"); fi
           if [[ "$PROOF_REQUIRE_BRIDGE" == "true" ]]; then args+=(--require-bridge --bridge-apk .proof/tempera-android-bridge.apk); fi
@@ -62,7 +65,9 @@ jobs:
         if: always()
         with:
           name: host-proof-macos-${{ github.run_id }}
-          path: proof.jsonl
+          path: |
+            proof.jsonl
+            ${{ runner.temp }}/tempera-android-emulator.log
           if-no-files-found: warn
 
   windows:
@@ -90,11 +95,14 @@ jobs:
         env:
           TEMPERA_ANDROID_BIN: target/release/tempera-android.exe
           TEMPERA_ANDROID_HOME: ${{ runner.temp }}/tempera-android-proof
+          TEMPERA_ANDROID_EMULATOR_LOG: ${{ runner.temp }}/tempera-android-emulator.log
+          TEMPERA_PROOF_DATA_GB: 8
           TEMPERA_PROOF_SESSION: windows-${{ github.run_id }}
           PROOF_MODE: ${{ inputs.mode }}
           PROOF_SERIAL: ${{ inputs.serial }}
           PROOF_REQUIRE_BRIDGE: ${{ inputs.require_bridge }}
         run: |
+          set -o pipefail
           args=(--mode "$PROOF_MODE")
           if [[ "$PROOF_MODE" == "managed" ]]; then args+=(--name "tempera-proof-windows-${{ github.run_id }}"); else args+=(--serial "$PROOF_SERIAL"); fi
           if [[ "$PROOF_REQUIRE_BRIDGE" == "true" ]]; then args+=(--require-bridge --bridge-apk .proof/tempera-android-bridge.apk); fi
@@ -103,5 +111,7 @@ jobs:
         if: always()
         with:
           name: host-proof-windows-${{ github.run_id }}
-          path: proof.jsonl
+          path: |
+            proof.jsonl
+            ${{ runner.temp }}/tempera-android-emulator.log
           if-no-files-found: warn

@@ -1,0 +1,72 @@
+name: android browser
+
+on:
+  pull_request:
+    paths:
+      - "android-browser/**"
+      - "cli/src/android_dom_browser.rs"
+      - "cli/src/bin/tempera-android-browser.rs"
+      - "cli/src/bin/tempera-android-dom-browser.rs"
+      - "scripts/build-android-browser.sh"
+      - ".github/workflows/android-browser.yml"
+  push:
+    branches:
+      - agent/runtime-efficiency
+    paths:
+      - "android-browser/**"
+      - "cli/src/android_dom_browser.rs"
+      - "cli/src/bin/tempera-android-browser.rs"
+      - "cli/src/bin/tempera-android-dom-browser.rs"
+      - "scripts/build-android-browser.sh"
+      - ".github/workflows/android-browser.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  browser-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Lint and build browser
+        run: gradle --no-daemon -p android-browser :app:lintDebug :app:assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-browser-debug
+          path: android-browser/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  host-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Test Chrome compatibility CLI
+        run: cargo test --locked -p tempera-android --bin tempera-android-browser
+      - name: Test dedicated DOM browser CLI
+        run: cargo test --locked -p tempera-android --bin tempera-android-dom-browser
+      - name: Test DOM browser library
+        run: cargo test --locked -p tempera-android android_dom_browser
+      - name: Clippy Chrome compatibility CLI
+        run: cargo clippy --locked -p tempera-android --bin tempera-android-browser -- -D warnings
+      - name: Clippy dedicated DOM browser CLI
+        run: cargo clippy --locked -p tempera-android --bin tempera-android-dom-browser -- -D warnings

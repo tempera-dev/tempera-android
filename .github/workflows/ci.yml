@@ -75,7 +75,7 @@ jobs:
             set -e; adb_path="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}/platform-tools/adb";
             export TEMPERA_ANDROID_ADB="$adb_path"; "$TEMPERA_ANDROID_ADB" -s emulator-5554 wait-for-device;
             while [ "$("$TEMPERA_ANDROID_ADB" -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" != "1" ]; do sleep 1; done;
-            set +e; response="$(cargo run --release -p tempera-android -- --serial emulator-5554 --transport adb --json snapshot)";
+            set +e; response="$(cargo run --release -p tempera-android --bin tempera-android -- --serial emulator-5554 --transport adb --json snapshot)";
             command_status=$?; set -e; printf '%s\n' "$response";
             test "$command_status" -eq 0; printf '%s\n' "$response" | jq -e '.ok == true' >/dev/null
 

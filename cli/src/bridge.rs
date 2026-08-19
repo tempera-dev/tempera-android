@@ -20,6 +20,8 @@ use std::time::Duration;
 
 pub const PACKAGE: &str = "dev.tempera.android.bridge";
 pub const SERVICE: &str = "dev.tempera.android.bridge/.BridgeAccessibilityService";
+const FULL_SERVICE: &str =
+    "dev.tempera.android.bridge/dev.tempera.android.bridge.BridgeAccessibilityService";
 pub const DEVICE_PORT: u16 = 6210;
 pub const PROTOCOL_VERSION: u64 = 3;
 
@@ -44,6 +46,8 @@ pub struct BridgeClient {
     client_id: String,
     server_epoch: Option<String>,
     adb: AdbBackend,
+    connection: Option<BufReader<TcpStream>>,
+    sequence: u64,
 }
 
 impl BridgeClient {
@@ -63,6 +67,8 @@ impl BridgeClient {
             client_id: hex::encode(bytes),
             server_epoch: None,
             adb,
+            connection: None,
+            sequence: 0,
         };
         let health = client.health()?;
         let protocol = health
@@ -180,8 +186,35 @@ impl BridgeClient {
     }
 
     fn request(&mut self, operation: &str, payload: Value, requires_epoch: bool) -> Result<Value> {
+        self.sequence = self.sequence.wrapping_add(1);
+        let request_id = format!("{}-{}", self.client_id, self.sequence);
+        let request = self.build_request(operation, payload, requires_epoch, &request_id)?;
+        match self.request_once(&request) {
+            Ok(result) => Ok(result),
+            Err(first) => {
+                // Protocol v3 caches a completed response before it is written
+                // to the socket, keyed by (client_id, request id). Replaying
+                // the exact same request after a transport failure therefore
+                // reconciles an ambiguous delivery without executing twice.
+                self.connection = None;
+                self.request_once(&request).map_err(|second| {
+                AndroidError::Backend(format!(
+                    "Bridge request failed after one same-ID reconnect: first={first}; second={second}"
+                ))
+            })
+            }
+        }
+    }
+
+    fn build_request(
+        &self,
+        operation: &str,
+        payload: Value,
+        requires_epoch: bool,
+        request_id: &str,
+    ) -> Result<Value> {
         let mut request = json!({
-            "id": format!("{}-{}", self.client_id, SnapshotV1::now_ms()),
+            "id": request_id,
             "client_id": self.client_id,
             "token": self.token,
             "op": operation,
@@ -197,17 +230,51 @@ impl BridgeClient {
                 request[key] = value.clone();
             }
         }
-        let address = format!("127.0.0.1:{}", self.host_port)
-            .parse()
-            .map_err(|_| AndroidError::Backend("Invalid bridge port".to_string()))?;
-        let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(900))?;
-        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
-        stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
-        stream.write_all(b"\n")?;
-        stream.flush()?;
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line)?;
-        let response: Value = serde_json::from_str(&line)?;
+        Ok(request)
+    }
+
+    fn request_once(&mut self, request: &Value) -> Result<Value> {
+        self.ensure_connection()?;
+        let encoded = serde_json::to_vec(request)?;
+        if encoded.len() > 1_000_000 {
+            return Err(AndroidError::InvalidInput(
+                "Bridge request exceeds device protocol limit".to_string(),
+            ));
+        }
+
+        let connection = self
+            .connection
+            .as_mut()
+            .expect("bridge connection established");
+        connection.get_mut().write_all(&encoded)?;
+        connection.get_mut().write_all(b"\n")?;
+        connection.get_mut().flush()?;
+
+        let mut line = Vec::new();
+        loop {
+            let available = connection.fill_buf()?;
+            if available.is_empty() {
+                return Err(AndroidError::Backend(
+                    "Bridge closed the persistent connection before responding".to_string(),
+                ));
+            }
+            let take = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |index| index + 1);
+            if line.len().saturating_add(take) > 4 * 1024 * 1024 {
+                return Err(AndroidError::Backend(
+                    "Bridge response exceeds 4 MiB host limit".to_string(),
+                ));
+            }
+            line.extend_from_slice(&available[..take]);
+            connection.consume(take);
+            if line.last() == Some(&b'\n') {
+                break;
+            }
+        }
+
+        let response: Value = serde_json::from_slice(&line)?;
         if response.get("ok").and_then(Value::as_bool) != Some(true) {
             return Err(AndroidError::Backend(
                 response
@@ -221,6 +288,21 @@ impl BridgeClient {
             .get("result")
             .cloned()
             .ok_or_else(|| AndroidError::Backend("Bridge response omitted result".to_string()))
+    }
+
+    fn ensure_connection(&mut self) -> Result<()> {
+        if self.connection.is_some() {
+            return Ok(());
+        }
+        let address = format!("127.0.0.1:{}", self.host_port)
+            .parse()
+            .map_err(|_| AndroidError::Backend("Invalid bridge port".to_string()))?;
+        let stream = TcpStream::connect_timeout(&address, Duration::from_millis(900))?;
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        self.connection = Some(BufReader::new(stream));
+        Ok(())
     }
 }
 
@@ -344,6 +426,7 @@ pub fn action_payload(action: &ActionV1, snapshot: &SnapshotV1) -> Result<Value>
 
 impl Drop for BridgeClient {
     fn drop(&mut self) {
+        self.connection = None;
         let _ = self.adb.remove_forward(self.host_port);
     }
 }
@@ -361,7 +444,7 @@ pub fn status(serial: &str, store: &SessionStore) -> Result<BridgeStatus> {
             "secure",
             "enabled_accessibility_services",
         ])
-        .map(|value| value.split(':').any(|service| service == SERVICE))
+        .map(|value| value.split(':').any(service_matches))
         .unwrap_or(false);
     let token_configured = token_path(store, serial).is_file();
     let mut value = BridgeStatus {
@@ -397,14 +480,16 @@ pub fn setup(serial: &str, store: &SessionStore, apk: Option<&Path>) -> Result<B
     adb.app_install(&[path])?;
     let token = create_token()?;
     write_token(store, serial, &token)?;
-    adb.shell(&[
-        "run-as",
-        PACKAGE,
-        "sh",
-        "-c",
-        &format!("umask 077; printf %s {} > files/bridge.token", token),
-    ])?;
+    let device_token_command = token_write_command(&token);
+    // ADB preserves a single command argument as one device-shell payload.
+    // Passing each `run-as ... sh -c` argument separately lets its outer
+    // shell split the script at `;`, dropping the app UID boundary.
+    adb.shell(&[&device_token_command])?;
     enable(&adb)?;
+    // A freshly installed companion is package-stopped until Android enables
+    // its Accessibility service. Waiting before this point can never succeed
+    // on current Android images, even though its manifest resolver is valid.
+    wait_for_accessibility_registration(&adb)?;
     status(serial, store)
 }
 
@@ -423,7 +508,7 @@ pub fn enable(adb: &AdbBackend) -> Result<()> {
         .filter(|value| !value.is_empty() && *value != "null")
         .map(str::to_string)
         .collect();
-    if !services.iter().any(|service| service == SERVICE) {
+    if !services.iter().any(|service| service_matches(service)) {
         services.push(SERVICE.to_string());
     }
     let joined = services.join(":");
@@ -450,7 +535,7 @@ pub fn disable(adb: &AdbBackend) -> Result<()> {
     let joined = existing
         .trim()
         .split(':')
-        .filter(|service| *service != SERVICE && *service != "null")
+        .filter(|service| !service_matches(service) && *service != "null")
         .collect::<Vec<_>>()
         .join(":");
     adb.shell(&[
@@ -625,6 +710,37 @@ fn create_token() -> Result<String> {
     Ok(hex::encode(value))
 }
 
+fn token_write_command(token: &str) -> String {
+    // `getFilesDir()` is created lazily by Android. Provision it before the
+    // service first starts, while keeping the token private to the app UID.
+    // The random token is hex and PACKAGE is a compile-time package name, so
+    // neither can terminate the single-quoted inner command.
+    format!(
+        "run-as {PACKAGE} sh -c 'umask 077; mkdir -p files; printf %s {token} > files/bridge.token'"
+    )
+}
+
+fn service_matches(value: &str) -> bool {
+    matches!(value.trim(), SERVICE | FULL_SERVICE)
+}
+
+fn wait_for_accessibility_registration(adb: &AdbBackend) -> Result<()> {
+    for _ in 0..20 {
+        if adb
+            .shell(&["dumpsys", "accessibility"])
+            .map(|state| state.contains(PACKAGE) && state.contains("BridgeAccessibilityService"))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err(AndroidError::Backend(
+        "Android did not register the installed Tempera Accessibility service within 5 seconds"
+            .to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,5 +756,20 @@ mod tests {
     #[test]
     fn bridge_token_paths_are_non_traversing() {
         assert_eq!(safe_serial("emulator-5554/../x"), "emulator_5554____x");
+    }
+
+    #[test]
+    fn token_provisioning_creates_the_private_files_directory() {
+        assert_eq!(
+            token_write_command("abcdef"),
+            "run-as dev.tempera.android.bridge sh -c 'umask 077; mkdir -p files; printf %s abcdef > files/bridge.token'"
+        );
+    }
+
+    #[test]
+    fn accessibility_component_accepts_android_short_and_full_forms() {
+        assert!(service_matches(SERVICE));
+        assert!(service_matches(FULL_SERVICE));
+        assert!(service_matches(&format!("{SERVICE}\r\n")));
     }
 }

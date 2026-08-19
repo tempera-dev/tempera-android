@@ -210,10 +210,22 @@ pub fn start(store: &SessionStore, options: StartOptions) -> Result<ManagedAvdV1
     command
         .env("ANDROID_SDK_ROOT", &tools.sdk_root)
         .env("ANDROID_HOME", &tools.sdk_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stdin(Stdio::null());
+    if let Some(log_path) = env::var_os("TEMPERA_ANDROID_EMULATOR_LOG") {
+        // This is opt-in diagnostic output for an operator-owned host proof.
+        // Appending avoids replacing a pre-existing log and leaves normal CLI
+        // invocations quiet by default.
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(PathBuf::from(log_path))?;
+        command
+            .stdout(Stdio::from(log.try_clone()?))
+            .stderr(Stdio::from(log));
+    } else {
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+    command.spawn()?;
     Ok(managed)
 }
 
@@ -477,9 +489,7 @@ fn home() -> PathBuf {
 }
 
 fn configure_avd(name: &str, ram_mb: Option<u32>, data_gb: Option<u32>) -> Result<()> {
-    let config = home()
-        .join(".android/avd")
-        .join(format!("{name}.avd/config.ini"));
+    let config = avd_home().join(format!("{name}.avd/config.ini"));
     if !config.is_file() {
         return Ok(());
     }
@@ -492,6 +502,12 @@ fn configure_avd(name: &str, ram_mb: Option<u32>, data_gb: Option<u32>) -> Resul
     }
     fs::write(config, source)?;
     Ok(())
+}
+
+fn avd_home() -> PathBuf {
+    env::var_os("ANDROID_AVD_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".android/avd"))
 }
 
 fn reject_physical(serial: &str, operation: &str) -> Result<()> {

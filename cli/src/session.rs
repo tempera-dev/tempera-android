@@ -1,9 +1,14 @@
 use crate::error::{AndroidError, Result};
 use crate::model::{ActionReceiptV1, SessionV1, SnapshotV1, CONTROL_SCHEMA_V1};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
+
+const MAX_RECEIPTS: usize = 256;
+const MAX_RECEIPT_DETAIL_BYTES: usize = 4096;
+const MAX_DIAGNOSTIC_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SessionStore {
@@ -147,11 +152,12 @@ impl SessionStore {
         Self::safe_id(session_id)?;
         let mut combined = self.receipts(session_id)?;
         for receipt in receipts {
+            let receipt = retained_receipt(receipt);
             combined.retain(|existing| existing.action_id != receipt.action_id);
-            combined.push(receipt.clone());
+            combined.push(receipt);
         }
-        if combined.len() > 256 {
-            combined.drain(..combined.len() - 256);
+        if combined.len() > MAX_RECEIPTS {
+            combined.drain(..combined.len() - MAX_RECEIPTS);
         }
         atomic_json(
             &self
@@ -186,7 +192,7 @@ impl SessionStore {
     /// The dashboard only reads this cache; it never invokes target diagnostics.
     pub fn save_diagnostic(&self, session_id: &str, name: &str, value: &Value) -> Result<()> {
         let path = self.diagnostic_path(session_id, name)?;
-        atomic_json(&path, value)
+        atomic_json(&path, &retained_diagnostic(value)?)
     }
 
     pub fn diagnostic(&self, session_id: &str, name: &str) -> Result<Option<Value>> {
@@ -224,13 +230,25 @@ impl SessionStore {
         Ok(())
     }
 
-    pub fn frame(&self, session_id: &str) -> Result<Option<Vec<u8>>> {
+    pub fn frame_len(&self, session_id: &str) -> Result<Option<u64>> {
         let path = self.frame_path(session_id)?;
         if path.is_file() {
-            Ok(Some(fs::read(path)?))
+            Ok(Some(fs::metadata(path)?.len()))
         } else {
             Ok(None)
         }
+    }
+
+    /// Stream a session-owned frame directly to a caller. This keeps dashboard
+    /// image delivery bounded even for a frame at the inspector size limit.
+    pub fn copy_frame_to(&self, session_id: &str, output: &mut impl Write) -> Result<bool> {
+        let path = self.frame_path(session_id)?;
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let mut source = BufReader::new(fs::File::open(path)?);
+        std::io::copy(&mut source, output)?;
+        Ok(true)
     }
 
     pub fn has_frame(&self, session_id: &str) -> Result<bool> {
@@ -314,6 +332,40 @@ fn atomic_json(path: &Path, value: &(impl serde::Serialize + ?Sized)) -> Result<
     Ok(())
 }
 
+fn retained_receipt(receipt: &ActionReceiptV1) -> ActionReceiptV1 {
+    let mut retained = receipt.clone();
+    if let Some(detail) = retained.detail.as_mut() {
+        *detail = truncate_utf8(detail, MAX_RECEIPT_DETAIL_BYTES);
+    }
+    retained
+}
+
+fn retained_diagnostic(value: &Value) -> Result<Value> {
+    let serialized = serde_json::to_vec(value)?;
+    if serialized.len() <= MAX_DIAGNOSTIC_BYTES {
+        return Ok(value.clone());
+    }
+    // Dashboard state is an observer cache, never the control response. Keep
+    // the cache bounded without retaining a potentially huge target payload.
+    Ok(json!({
+        "truncated": true,
+        "originalBytes": serialized.len(),
+        "detail": "diagnostic exceeded the persisted dashboard cache limit",
+    }))
+}
+
+fn truncate_utf8(value: &str, maximum: usize) -> String {
+    const SUFFIX: &str = "…[truncated]";
+    if value.len() <= maximum {
+        return value.to_string();
+    }
+    let mut boundary = maximum.saturating_sub(SUFFIX.len());
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    format!("{}{}", &value[..boundary], SUFFIX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +399,18 @@ mod tests {
         let records = store.receipts("session").unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].after_revision, 3);
+    }
+
+    #[test]
+    fn retained_receipts_cap_detail_without_changing_action_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(directory.path().to_path_buf()).unwrap();
+        let mut oversized = receipt("long-detail");
+        oversized.detail = Some("🦀".repeat(MAX_RECEIPT_DETAIL_BYTES));
+        store.save_receipts("session", &[oversized]).unwrap();
+        let retained = store.receipts("session").unwrap().pop().unwrap();
+        assert_eq!(retained.action_id, "long-detail");
+        assert!(retained.detail.unwrap().len() <= MAX_RECEIPT_DETAIL_BYTES);
     }
 
     #[test]
@@ -399,5 +463,21 @@ mod tests {
         );
         assert!(store.remove("session").unwrap());
         assert!(store.diagnostic("session", "network").unwrap().is_none());
+    }
+
+    #[test]
+    fn oversized_diagnostics_are_replaced_with_bounded_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(directory.path().to_path_buf()).unwrap();
+        store
+            .save_diagnostic(
+                "session",
+                "logs",
+                &json!({"output": "x".repeat(MAX_DIAGNOSTIC_BYTES + 1)}),
+            )
+            .unwrap();
+        let retained = store.diagnostic("session", "logs").unwrap().unwrap();
+        assert_eq!(retained["truncated"], true);
+        assert!(retained["originalBytes"].as_u64().unwrap() > MAX_DIAGNOSTIC_BYTES as u64);
     }
 }

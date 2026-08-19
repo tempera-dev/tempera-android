@@ -13,7 +13,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * Frozen, offline UI fixture for measuring Android-agent control quality.
+ * Frozen, offline UI fixture for measuring Tempera Android control quality.
  *
  * This activity intentionally has no launcher intent. The trusted eval harness starts it by
  * explicit component. It contains no network calls, credentials, hidden state, or privileged

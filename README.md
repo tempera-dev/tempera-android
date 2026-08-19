@@ -79,6 +79,12 @@ tempera-android --serial emulator-5554 bench --iterations 20 --json
 
 MCP tools are named `tempera_android_*` and delegate to the same canonical command executor. It includes bounded read-only `tempera_android_stream`; filesystem recording remains a deliberate CLI-only action. The read-only dashboard displays sessions/devices, a selected semantic node, the last explicitly captured frame, receipts, and the latest explicit logcat/network/model/eval activity without participating in the control path.
 
+The daemon and dashboard are local-only control surfaces: they accept only an
+explicit loopback IP address (for example `127.0.0.1:7421` or `[::1]:7421`),
+use bounded worker pools, and reject oversized daemon frames before command
+execution. Put a separately authenticated proxy in front of a remote service;
+do not expose either listener directly to a network.
+
 ## Target boundaries
 
 - Managed emulator operations create, start, reset, and delete only Tempera-recorded AVDs. Existing AVD data is never silently imported, moved, reset, or deleted.
