@@ -26,6 +26,10 @@ enum Commands {
         url: String,
     },
     Snapshot,
+    SnapshotDelta {
+        #[arg(long)]
+        previous_state_hash: String,
+    },
     Tap(RefAction),
     Fill(TextAction),
     Type(TextAction),
@@ -103,6 +107,9 @@ fn run(client: &mut DomBrowserClient, command: Commands) -> tempera_android::Res
         Commands::Health => client.health(),
         Commands::Open { url } => client.navigate(&url),
         Commands::Snapshot => client.snapshot(),
+        Commands::SnapshotDelta {
+            previous_state_hash,
+        } => client.snapshot_delta(&previous_state_hash),
         Commands::Tap(arguments) => client.act_observe(
             action_value(
                 "tap",
@@ -210,6 +217,7 @@ fn dispatch(client: &mut DomBrowserClient, request: &Value) -> tempera_android::
     match operation {
         "health" => client.health(),
         "snapshot" => client.snapshot(),
+        "snapshotDelta" => client.snapshot_delta(required_string(object, "previousStateHash")?),
         "open" => client.navigate(required_string(object, "url")?),
         "tap" | "fill" | "type" | "scroll" | "back" => {
             let hash = required_string(object, "expectedStateHash")?.to_string();

@@ -63,6 +63,19 @@ impl DomBrowserClient {
         self.request_readonly("GET", "/v1/snapshot", None)
     }
 
+    pub fn snapshot_delta(&mut self, previous_state_hash: &str) -> Result<Value> {
+        if previous_state_hash.is_empty() || previous_state_hash.len() > 256 {
+            return Err(AndroidError::InvalidInput(
+                "snapshot delta requires a bounded previousStateHash".to_string(),
+            ));
+        }
+        self.request_readonly(
+            "POST",
+            "/v1/snapshot-delta",
+            Some(json!({"previousStateHash": previous_state_hash})),
+        )
+    }
+
     pub fn navigate(&mut self, url: &str) -> Result<Value> {
         validate_url(url)?;
         self.request_mutating("POST", "/v1/navigate", Some(json!({"url": url})))
