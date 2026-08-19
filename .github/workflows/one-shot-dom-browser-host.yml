@@ -4,22 +4,34 @@ on:
   push:
     branches:
       - agent/runtime-efficiency
+    paths:
+      - .github/workflows/one-shot-dom-browser-host.yml
+      - cli/src/android_dom_browser.rs
+      - cli/src/bin/tempera-android-dom-browser.rs
+      - cli/src/lib.rs
 
 permissions:
   contents: write
 
+concurrency:
+  group: one-shot-android-dom-browser-host-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate-host:
     if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/runtime-efficiency
-      - uses: dtolnay/rust-toolchain@stable
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
+
       - name: Apply stable-Rust transport fixes
         shell: python
         run: |
@@ -83,24 +95,27 @@ jobs:
           if old not in text:
               raise SystemExit('bounded header helper anchor not found')
           path.write_text(text.replace(old, new, 1))
-      - name: Format
-        run: cargo fmt --all
-      - name: Clippy
+
+      - name: Canonical formatting and hygiene
+        run: |
+          cargo fmt --all
+          cargo fmt --all --check
+          git diff --check
+      - name: Strict workspace Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
+      - name: Workspace tests
         run: cargo test --workspace
       - name: Release build
         run: cargo build --workspace --release
-      - name: Commit validated host runtime
+
+      - name: Commit validated host runtime and remove one-shot workflow
         shell: bash
         run: |
           set -euo pipefail
-          git add cli/src/android_dom_browser.rs cli/src/bin/tempera-android-dom-browser.rs cli/src/lib.rs
-          if git diff --cached --quiet; then
-            echo 'No host changes after validation'
-            exit 0
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cli/src/android_dom_browser.rs cli/src/bin/tempera-android-dom-browser.rs cli/src/lib.rs
+          git rm .github/workflows/one-shot-dom-browser-host.yml
+          git diff --cached --check
           git commit -m 'perf: validate persistent Android DOM browser host'
           git push origin HEAD:agent/runtime-efficiency
