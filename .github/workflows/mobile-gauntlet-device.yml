@@ -1,0 +1,56 @@
+name: mobile gauntlet device contract
+
+on:
+  pull_request:
+    paths:
+      - "contracts/mobile-gauntlet-device-plan.schema.json"
+      - "scripts/mobile-gauntlet-device.py"
+      - "tests/fixtures/mobile-gauntlet-plan.json"
+      - "tests/test_mobile_gauntlet_device_plan.py"
+      - "docs/MOBILE_GAUNTLET.md"
+      - ".github/workflows/mobile-gauntlet-device.yml"
+  push:
+    branches:
+      - agent/mobile-gauntlet-device-lane
+    paths:
+      - "contracts/mobile-gauntlet-device-plan.schema.json"
+      - "scripts/mobile-gauntlet-device.py"
+      - "tests/fixtures/mobile-gauntlet-plan.json"
+      - "tests/test_mobile_gauntlet_device_plan.py"
+      - "docs/MOBILE_GAUNTLET.md"
+      - ".github/workflows/mobile-gauntlet-device.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Parse committed JSON contracts
+        run: |
+          python -m json.tool contracts/mobile-gauntlet-device-plan.schema.json >/dev/null
+          python -m json.tool tests/fixtures/mobile-gauntlet-plan.json >/dev/null
+      - name: Compile harness
+        run: python -m py_compile scripts/mobile-gauntlet-device.py tests/test_mobile_gauntlet_device_plan.py
+      - name: Run adversarial plan tests
+        run: python -m unittest -v tests/test_mobile_gauntlet_device_plan.py
+      - name: Emit deterministic validation receipt
+        run: >-
+          python scripts/mobile-gauntlet-device.py
+          tests/fixtures/mobile-gauntlet-plan.json
+          --validate-only
+          > /tmp/mobile-gauntlet-plan-validation.json
+      - name: Preserve Rust parent invariants
+        run: cargo test --workspace --locked
+      - name: Publish validation receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-gauntlet-device-contract-${{ github.sha }}
+          path: /tmp/mobile-gauntlet-plan-validation.json
+          if-no-files-found: error
