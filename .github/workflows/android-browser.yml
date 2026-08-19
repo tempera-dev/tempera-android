@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "android-browser/**"
+      - "cli/src/android_dom_browser.rs"
       - "cli/src/bin/tempera-android-browser.rs"
+      - "cli/src/bin/tempera-android-dom-browser.rs"
       - "scripts/build-android-browser.sh"
       - ".github/workflows/android-browser.yml"
   push:
@@ -12,7 +14,9 @@ on:
       - agent/runtime-efficiency
     paths:
       - "android-browser/**"
+      - "cli/src/android_dom_browser.rs"
       - "cli/src/bin/tempera-android-browser.rs"
+      - "cli/src/bin/tempera-android-dom-browser.rs"
       - "scripts/build-android-browser.sh"
       - ".github/workflows/android-browser.yml"
 
@@ -56,7 +60,13 @@ jobs:
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt --all --check
-      - name: Test host CLI target
+      - name: Test Chrome compatibility CLI
         run: cargo test -p tempera-android --bin tempera-android-browser
-      - name: Clippy host CLI target
+      - name: Test dedicated DOM browser CLI
+        run: cargo test -p tempera-android --bin tempera-android-dom-browser
+      - name: Test DOM browser library
+        run: cargo test -p tempera-android android_dom_browser
+      - name: Clippy Chrome compatibility CLI
         run: cargo clippy -p tempera-android --bin tempera-android-browser -- -D warnings
+      - name: Clippy dedicated DOM browser CLI
+        run: cargo clippy -p tempera-android --bin tempera-android-dom-browser -- -D warnings
