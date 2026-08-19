@@ -22,6 +22,7 @@ final class BrowserRuntime {
     private long revision;
     private String lastStateHash = "";
     private String lastUrl = "about:blank";
+    private boolean domRuntimeInstalled;
 
     BrowserRuntime(Activity activity, WebView webView) {
         this.activity = activity;
@@ -36,6 +37,7 @@ final class BrowserRuntime {
             .put("port", ControlServer.PORT)
             .put("url", lastUrl)
             .put("revision", revision)
+            .put("domRuntimeInstalled", domRuntimeInstalled)
             .put("primaryTransport", "instrumented-webview-dom")
             .put("fallbackTransport", "tempera-android-accessibility");
     }
@@ -57,6 +59,7 @@ final class BrowserRuntime {
         lastUrl = rawUrl;
         revision += 1;
         lastStateHash = "";
+        domRuntimeInstalled = false;
         return new JSONObject()
             .put("schemaVersion", "tempera.android.browser.navigation/v1")
             .put("accepted", true)
@@ -65,6 +68,7 @@ final class BrowserRuntime {
     }
 
     synchronized JSONObject snapshot() throws Exception {
+        ensureDomRuntime();
         JSONObject snapshot = evaluateObject(DomProgram.snapshot());
         return decorateSnapshot(snapshot);
     }
@@ -74,6 +78,7 @@ final class BrowserRuntime {
         if ("back".equals(kind)) {
             return navigateBack(request);
         }
+        ensureDomRuntime();
         JSONObject result = evaluateObject(
             "scroll".equals(kind) ? DomProgram.scroll(request) : DomProgram.action(request)
         );
@@ -147,12 +152,23 @@ final class BrowserRuntime {
         lastUrl = url == null ? "" : url;
         revision += 1;
         lastStateHash = "";
+        domRuntimeInstalled = false;
     }
 
     synchronized void onPageFinished(String url) {
         lastUrl = url == null ? "" : url;
         revision += 1;
         lastStateHash = "";
+        domRuntimeInstalled = false;
+        // Pre-warm the semantic runtime as soon as the document finishes. This
+        // happens asynchronously on WebView's UI thread so page load is never
+        // blocked by the host control channel. The first host request still
+        // verifies/installs synchronously if it races this callback.
+        activity.runOnUiThread(() -> webView.evaluateJavascript(DomProgram.install(), ignored -> {
+            synchronized (BrowserRuntime.this) {
+                domRuntimeInstalled = true;
+            }
+        }));
     }
 
     private JSONObject navigateBack(JSONObject request) throws Exception {
@@ -179,6 +195,7 @@ final class BrowserRuntime {
         }
         revision += 1;
         lastStateHash = "";
+        domRuntimeInstalled = false;
         return new JSONObject()
             .put("ok", moved.get())
             .put("stale", false)
@@ -187,6 +204,17 @@ final class BrowserRuntime {
                 .put("kind", "back")
                 .put("beforeStateHash", before.optString("documentStateHash", "")))
             .put("after", snapshot());
+    }
+
+    private void ensureDomRuntime() throws Exception {
+        if (domRuntimeInstalled) {
+            return;
+        }
+        JSONObject installed = evaluateObject(DomProgram.install());
+        if (!installed.optBoolean("ok", false) || installed.optInt("version", 0) != 1) {
+            throw new IllegalStateException("Tempera DOM runtime installation failed");
+        }
+        domRuntimeInstalled = true;
     }
 
     private JSONObject evaluateObject(String script) throws Exception {
@@ -240,6 +268,9 @@ final class BrowserRuntime {
     }
 
     private boolean containsExactText(JSONObject snapshot, String exactText) {
+        if (snapshot.optJSONArray("nodes") == null) {
+            return false;
+        }
         for (int index = 0; index < snapshot.optJSONArray("nodes").length(); index += 1) {
             JSONObject node = snapshot.optJSONArray("nodes").optJSONObject(index);
             if (node != null && exactText.equals(node.optString("label"))) {
