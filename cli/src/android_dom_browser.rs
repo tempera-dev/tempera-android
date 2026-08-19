@@ -33,12 +33,7 @@ impl DomBrowserClient {
     pub fn connect(serial: &str) -> Result<Self> {
         let adb = AdbBackend::new(serial)?;
         adb.ensure_ready()?;
-        adb.shell(&[
-            "am",
-            "start",
-            "-n",
-            &format!("{PACKAGE}/{ACTIVITY}"),
-        ])?;
+        adb.shell(&["am", "start", "-n", &format!("{PACKAGE}/{ACTIVITY}")])?;
         let token = read_token(&adb)?;
         let host_port = unused_port()?;
         adb.forward(host_port, DEVICE_PORT)?;
@@ -165,11 +160,12 @@ impl DomBrowserClient {
                 // Read-only calls may be replayed after an ambiguous transport
                 // failure because they cannot create browser-side effects.
                 self.connection = None;
-                self.request_once(method, path, body.as_ref()).map_err(|second| {
-                    AndroidError::Backend(format!(
+                self.request_once(method, path, body.as_ref())
+                    .map_err(|second| {
+                        AndroidError::Backend(format!(
                         "Android DOM browser read failed ({first}); reconnect failed ({second})"
                     ))
-                })
+                    })
             }
         }
     }
@@ -244,7 +240,6 @@ impl DomBrowserClient {
         let address = SocketAddr::from(([127, 0, 0, 1], self.host_port));
         let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
         stream.set_nodelay(true)?;
-        stream.set_keepalive(true)?;
         stream.set_read_timeout(Some(Duration::from_secs(12)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
         self.connection = Some(BufReader::new(stream));
@@ -321,19 +316,27 @@ fn read_http_response(reader: &mut BufReader<TcpStream>) -> Result<HttpResponse>
 
 fn read_bounded_header_line(reader: &mut BufReader<TcpStream>) -> Result<String> {
     let mut line = Vec::new();
-    let bytes = reader
-        .by_ref()
-        .take((MAX_HEADER_LINE + 1) as u64)
-        .read_until(b'\n', &mut line)?;
-    if bytes == 0 {
-        return Err(AndroidError::Backend(
-            "Android browser control connection closed".to_string(),
-        ));
-    }
-    if line.len() > MAX_HEADER_LINE {
-        return Err(AndroidError::Backend(
-            "Android browser HTTP header exceeds limit".to_string(),
-        ));
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Err(AndroidError::Backend(
+                "Android browser control connection closed".to_string(),
+            ));
+        }
+        let take = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if line.len().saturating_add(take) > MAX_HEADER_LINE {
+            return Err(AndroidError::Backend(
+                "Android browser HTTP header exceeds limit".to_string(),
+            ));
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if line.last() == Some(&b'\n') {
+            break;
+        }
     }
     while matches!(line.last(), Some(b'\r' | b'\n')) {
         line.pop();
@@ -384,7 +387,10 @@ fn validate_action(action: &Value) -> Result<()> {
         .get("kind")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !matches!(kind, "tap" | "click" | "fill" | "type" | "scroll" | "scrollIntoView" | "back") {
+    if !matches!(
+        kind,
+        "tap" | "click" | "fill" | "type" | "scroll" | "scrollIntoView" | "back"
+    ) {
         return Err(AndroidError::InvalidInput(format!(
             "Unsupported Android DOM browser action {kind:?}"
         )));
@@ -399,7 +405,10 @@ fn validate_action(action: &Value) -> Result<()> {
         ));
     }
     if !matches!(kind, "scroll" | "back") {
-        let reference = object.get("ref").and_then(Value::as_str).unwrap_or_default();
+        let reference = object
+            .get("ref")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !reference.starts_with("@d") || reference.len() > 32 {
             return Err(AndroidError::InvalidInput(
                 "Android DOM browser action requires a bounded @d reference".to_string(),

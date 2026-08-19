@@ -22,7 +22,9 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Health,
-    Open { url: String },
+    Open {
+        url: String,
+    },
     Snapshot,
     Tap(RefAction),
     Fill(TextAction),
@@ -204,26 +206,26 @@ fn dispatch(client: &mut DomBrowserClient, request: &Value) -> tempera_android::
     let object = request.as_object().ok_or_else(|| {
         tempera_android::AndroidError::InvalidInput("serve request must be an object".to_string())
     })?;
-    let operation = object
-        .get("op")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let operation = object.get("op").and_then(Value::as_str).unwrap_or_default();
     match operation {
         "health" => client.health(),
         "snapshot" => client.snapshot(),
         "open" => client.navigate(required_string(object, "url")?),
         "tap" | "fill" | "type" | "scroll" | "back" => {
             let hash = required_string(object, "expectedStateHash")?.to_string();
-            let reference = object.get("ref").and_then(Value::as_str).map(str::to_string);
-            let text = object.get("text").and_then(Value::as_str).map(str::to_string);
+            let reference = object
+                .get("ref")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let text = object
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let direction = object
                 .get("direction")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let settle_ms = object
-                .get("settleMs")
-                .and_then(Value::as_u64)
-                .unwrap_or(48);
+            let settle_ms = object.get("settleMs").and_then(Value::as_u64).unwrap_or(48);
             client.act_observe(
                 action_value(operation, reference, text, direction, hash),
                 settle_ms,
@@ -255,7 +257,10 @@ fn dispatch(client: &mut DomBrowserClient, request: &Value) -> tempera_android::
     }
 }
 
-fn required_string<'a>(object: &'a Map<String, Value>, key: &str) -> tempera_android::Result<&'a str> {
+fn required_string<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+) -> tempera_android::Result<&'a str> {
     object
         .get(key)
         .and_then(Value::as_str)
