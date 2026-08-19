@@ -73,6 +73,20 @@ final class BrowserRuntime {
         return decorateSnapshot(snapshot);
     }
 
+    synchronized JSONObject snapshotDelta(JSONObject request) throws Exception {
+        ensureDomRuntime();
+        String previousStateHash = request.optString("previousStateHash", "");
+        JSONObject delta = evaluateObject(DomProgram.snapshotDelta(previousStateHash));
+        if (delta.optBoolean("unchanged", false)) {
+            delta.put("revision", revision);
+            delta.put("targetKind", "android-webview");
+            delta.put("package", activity.getPackageName());
+            lastUrl = delta.optString("url", lastUrl);
+            return delta;
+        }
+        return decorateSnapshot(delta);
+    }
+
     synchronized JSONObject action(JSONObject request) throws Exception {
         String kind = request.optString("kind", "tap");
         if ("back".equals(kind)) {
