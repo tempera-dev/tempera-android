@@ -40,7 +40,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Live Android browser proof
+      - name: Live Android browser proof and hot-path benchmark
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -50,3 +50,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
           script: bash scripts/android-browser-emulator-proof.sh
+      - name: Publish Android browser benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-browser-hotpath-benchmark-${{ github.sha }}
+          path: android-browser-benchmark.json
+          if-no-files-found: error
