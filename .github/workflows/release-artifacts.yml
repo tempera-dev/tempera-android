@@ -7,6 +7,8 @@ on:
       - "Cargo.toml"
       - "cli/**"
       - "bin/**"
+      - "android-browser/**"
+      - "package.json"
       - ".github/workflows/release-artifacts.yml"
   workflow_dispatch:
     inputs:
@@ -28,29 +30,27 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: x64
-            binary: target/release/tempera-android
+            extension: ""
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-            binary: target/release/tempera-android
-          # macos-13 is retired; macos-15-intel is GitHub's supported x64
-          # macOS image and preserves the release architecture contract.
+            extension: ""
           - os: macos-15-intel
             platform: macos
             arch: x64
-            binary: target/release/tempera-android
+            extension: ""
           - os: macos-15
             platform: macos
             arch: arm64
-            binary: target/release/tempera-android
+            extension: ""
           - os: windows-latest
             platform: windows
             arch: x64
-            binary: target/release/tempera-android.exe
+            extension: ".exe"
           - os: windows-11-arm
             platform: windows
             arch: arm64
-            binary: target/release/tempera-android.exe
+            extension: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +59,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ${{ matrix.binary }}
+          path: |
+            target/release/tempera-android${{ matrix.extension }}
+            target/release/tempera-android-browser${{ matrix.extension }}
+            target/release/tempera-android-dom-browser${{ matrix.extension }}
           if-no-files-found: error
 
   companion:
@@ -79,9 +82,30 @@ jobs:
           path: companion/build/tempera-android-bridge.apk
           if-no-files-found: error
 
+  browser-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Lint and build dedicated browser
+        run: gradle --no-daemon -p android-browser :app:lintDebug :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-browser-apk
+          path: android-browser/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   npm-package:
     name: installable npm package
-    needs: [native, companion]
+    needs: [native, companion, browser-apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,34 +113,57 @@ jobs:
         with:
           pattern: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-*
           path: artifacts
-      - name: Assemble universal native layout
+      - name: Assemble universal native and browser layout
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p native/linux-x64 native/linux-arm64 native/macos-x64 native/macos-arm64 native/windows-x64 native/windows-arm64
-          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-linux-x64/tempera-android native/linux-x64/tempera-android
-          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-linux-arm64/tempera-android native/linux-arm64/tempera-android
-          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-macos-x64/tempera-android native/macos-x64/tempera-android
-          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-macos-arm64/tempera-android native/macos-arm64/tempera-android
-          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-x64/tempera-android.exe native/windows-x64/tempera-android.exe
-          cp artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-arm64/tempera-android.exe native/windows-arm64/tempera-android.exe
-          chmod +x native/linux-*/tempera-android native/macos-*/tempera-android
+          mkdir -p \
+            native/linux-x64 native/linux-arm64 \
+            native/macos-x64 native/macos-arm64 \
+            native/windows-x64 native/windows-arm64 \
+            assets
+
+          for name in tempera-android tempera-android-browser tempera-android-dom-browser; do
+            cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-linux-x64/$name" "native/linux-x64/$name"
+            cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-linux-arm64/$name" "native/linux-arm64/$name"
+            cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-macos-x64/$name" "native/macos-x64/$name"
+            cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-macos-arm64/$name" "native/macos-arm64/$name"
+            cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-x64/$name.exe" "native/windows-x64/$name.exe"
+            cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-windows-arm64/$name.exe" "native/windows-arm64/$name.exe"
+          done
+          chmod +x native/linux-*/* native/macos-*/*
+          cp "artifacts/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-browser-apk/app-debug.apk" assets/tempera-android-browser.apk
+
+      - name: Validate Node launchers
+        run: npm test
+
       - name: Pack npm package
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
           npm pack --pack-destination dist
+
       - name: Verify package contents and Linux install
         shell: bash
         run: |
           set -euo pipefail
-          tar -tzf dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz > package-contents.txt
+          TGZ="dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz"
+          tar -tzf "$TGZ" > package-contents.txt
           grep -qx 'package/native/linux-x64/tempera-android' package-contents.txt
-          grep -qx 'package/native/macos-arm64/tempera-android' package-contents.txt
-          grep -qx 'package/native/windows-x64/tempera-android.exe' package-contents.txt
-          npm install --prefix "$PWD/smoke" "$PWD/dist/tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}.tgz"
+          grep -qx 'package/native/linux-x64/tempera-android-browser' package-contents.txt
+          grep -qx 'package/native/linux-x64/tempera-android-dom-browser' package-contents.txt
+          grep -qx 'package/native/macos-arm64/tempera-android-dom-browser' package-contents.txt
+          grep -qx 'package/native/windows-x64/tempera-android-browser.exe' package-contents.txt
+          grep -qx 'package/assets/tempera-android-browser.apk' package-contents.txt
+          grep -qx 'package/bin/tempera-android-browser.js' package-contents.txt
+          grep -qx 'package/bin/tempera-android-dom-browser.js' package-contents.txt
+
+          npm install --prefix "$PWD/smoke" "$PWD/$TGZ"
           "$PWD/smoke/node_modules/.bin/tempera-android" --version
+          "$PWD/smoke/node_modules/.bin/tempera-android-browser" --version
+          "$PWD/smoke/node_modules/.bin/tempera-android-dom-browser" --version
+
       - uses: actions/upload-artifact@v4
         with:
           name: tempera-android-${{ inputs.version || '0.4.0-alpha.1' }}-npm-package
