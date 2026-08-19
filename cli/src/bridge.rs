@@ -46,6 +46,8 @@ pub struct BridgeClient {
     client_id: String,
     server_epoch: Option<String>,
     adb: AdbBackend,
+    connection: Option<BufReader<TcpStream>>,
+    sequence: u64,
 }
 
 impl BridgeClient {
@@ -65,6 +67,8 @@ impl BridgeClient {
             client_id: hex::encode(bytes),
             server_epoch: None,
             adb,
+            connection: None,
+            sequence: 0,
         };
         let health = client.health()?;
         let protocol = health
@@ -182,8 +186,35 @@ impl BridgeClient {
     }
 
     fn request(&mut self, operation: &str, payload: Value, requires_epoch: bool) -> Result<Value> {
+        self.sequence = self.sequence.wrapping_add(1);
+        let request_id = format!("{}-{}", self.client_id, self.sequence);
+        let request = self.build_request(operation, payload, requires_epoch, &request_id)?;
+        match self.request_once(&request) {
+            Ok(result) => Ok(result),
+            Err(first) => {
+                // Protocol v3 caches a completed response before it is written
+                // to the socket, keyed by (client_id, request id). Replaying
+                // the exact same request after a transport failure therefore
+                // reconciles an ambiguous delivery without executing twice.
+                self.connection = None;
+                self.request_once(&request).map_err(|second| {
+                AndroidError::Backend(format!(
+                    "Bridge request failed after one same-ID reconnect: first={first}; second={second}"
+                ))
+            })
+            }
+        }
+    }
+
+    fn build_request(
+        &self,
+        operation: &str,
+        payload: Value,
+        requires_epoch: bool,
+        request_id: &str,
+    ) -> Result<Value> {
         let mut request = json!({
-            "id": format!("{}-{}", self.client_id, SnapshotV1::now_ms()),
+            "id": request_id,
             "client_id": self.client_id,
             "token": self.token,
             "op": operation,
@@ -199,17 +230,51 @@ impl BridgeClient {
                 request[key] = value.clone();
             }
         }
-        let address = format!("127.0.0.1:{}", self.host_port)
-            .parse()
-            .map_err(|_| AndroidError::Backend("Invalid bridge port".to_string()))?;
-        let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(900))?;
-        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
-        stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
-        stream.write_all(b"\n")?;
-        stream.flush()?;
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line)?;
-        let response: Value = serde_json::from_str(&line)?;
+        Ok(request)
+    }
+
+    fn request_once(&mut self, request: &Value) -> Result<Value> {
+        self.ensure_connection()?;
+        let encoded = serde_json::to_vec(request)?;
+        if encoded.len() > 1_000_000 {
+            return Err(AndroidError::InvalidInput(
+                "Bridge request exceeds device protocol limit".to_string(),
+            ));
+        }
+
+        let connection = self
+            .connection
+            .as_mut()
+            .expect("bridge connection established");
+        connection.get_mut().write_all(&encoded)?;
+        connection.get_mut().write_all(b"\n")?;
+        connection.get_mut().flush()?;
+
+        let mut line = Vec::new();
+        loop {
+            let available = connection.fill_buf()?;
+            if available.is_empty() {
+                return Err(AndroidError::Backend(
+                    "Bridge closed the persistent connection before responding".to_string(),
+                ));
+            }
+            let take = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |index| index + 1);
+            if line.len().saturating_add(take) > 4 * 1024 * 1024 {
+                return Err(AndroidError::Backend(
+                    "Bridge response exceeds 4 MiB host limit".to_string(),
+                ));
+            }
+            line.extend_from_slice(&available[..take]);
+            connection.consume(take);
+            if line.last() == Some(&b'\n') {
+                break;
+            }
+        }
+
+        let response: Value = serde_json::from_slice(&line)?;
         if response.get("ok").and_then(Value::as_bool) != Some(true) {
             return Err(AndroidError::Backend(
                 response
@@ -223,6 +288,21 @@ impl BridgeClient {
             .get("result")
             .cloned()
             .ok_or_else(|| AndroidError::Backend("Bridge response omitted result".to_string()))
+    }
+
+    fn ensure_connection(&mut self) -> Result<()> {
+        if self.connection.is_some() {
+            return Ok(());
+        }
+        let address = format!("127.0.0.1:{}", self.host_port)
+            .parse()
+            .map_err(|_| AndroidError::Backend("Invalid bridge port".to_string()))?;
+        let stream = TcpStream::connect_timeout(&address, Duration::from_millis(900))?;
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(Duration::from_secs(8)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        self.connection = Some(BufReader::new(stream));
+        Ok(())
     }
 }
 
@@ -346,6 +426,7 @@ pub fn action_payload(action: &ActionV1, snapshot: &SnapshotV1) -> Result<Value>
 
 impl Drop for BridgeClient {
     fn drop(&mut self) {
+        self.connection = None;
         let _ = self.adb.remove_forward(self.host_port);
     }
 }
