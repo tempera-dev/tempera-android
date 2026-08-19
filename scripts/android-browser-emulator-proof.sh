@@ -82,20 +82,47 @@ fi
 jq -e '.ok == true and .primaryTransport == "instrumented-webview-dom"' \
   /tmp/tempera-browser-health.json >/dev/null
 
-request GET /v1/snapshot > /tmp/tempera-browser-before.json
-jq -e '
-  .schemaVersion == "tempera.android.browser.snapshot/v1" and
-  (.documentStateHash | startswith("fnv1a64:")) and
-  (.revision | type == "number") and
-  (.nodes | type == "array") and
-  .trustedForConsequentialActions == false
-' /tmp/tempera-browser-before.json >/dev/null
+# Control-server readiness and semantic-WebView readiness are distinct. The
+# activity can expose /v1/health before the first document has completed enough
+# initialization for DOM capture. Retry only this initial read-only readiness
+# probe; benchmark requests and mutations below remain single-attempt evidence.
+snapshot_ready=0
+for _ in $(seq 1 40); do
+  if request GET /v1/snapshot > /tmp/tempera-browser-before.json 2>/tmp/tempera-browser-before.err && \
+    jq -e '
+      .schemaVersion == "tempera.android.browser.snapshot/v1" and
+      (.documentStateHash | startswith("fnv1a64:")) and
+      (.revision | type == "number") and
+      (.nodes | type == "array") and
+      .trustedForConsequentialActions == false
+    ' /tmp/tempera-browser-before.json >/dev/null 2>&1; then
+    snapshot_ready=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$snapshot_ready" -ne 1 ]]; then
+  echo 'browser control server became healthy but semantic snapshot never became ready' >&2
+  cat /tmp/tempera-browser-before.err >&2 || true
+  diagnostics
+  exit 1
+fi
 
 before_hash="$(jq -r '.documentStateHash' /tmp/tempera-browser-before.json)"
 stale_body="$(jq -cn '{kind:"tap",ref:"@d1",expectedStateHash:"fnv1a64:0000000000000000"}')"
-request POST /v1/action "$stale_body" > /tmp/tempera-browser-stale.json
+if ! request POST /v1/action "$stale_body" > /tmp/tempera-browser-stale.json 2>/tmp/tempera-browser-stale.err; then
+  echo 'stale-action proof request failed after semantic readiness' >&2
+  cat /tmp/tempera-browser-stale.err >&2 || true
+  diagnostics
+  exit 1
+fi
 jq -e '.ok == false and .stale == true' /tmp/tempera-browser-stale.json >/dev/null
-request GET /v1/snapshot > /tmp/tempera-browser-after.json
+if ! request GET /v1/snapshot > /tmp/tempera-browser-after.json 2>/tmp/tempera-browser-after.err; then
+  echo 'post-stale snapshot failed after semantic readiness' >&2
+  cat /tmp/tempera-browser-after.err >&2 || true
+  diagnostics
+  exit 1
+fi
 after_hash="$(jq -r '.documentStateHash' /tmp/tempera-browser-after.json)"
 [[ "$before_hash" == "$after_hash" ]]
 
