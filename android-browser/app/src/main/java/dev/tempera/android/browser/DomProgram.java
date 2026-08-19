@@ -4,7 +4,11 @@ import org.json.JSONObject;
 
 final class DomProgram {
     private static final int MAX_NODES = 600;
+    private static final String GLOBAL = "__temperaAgentRuntimeV1";
 
+    // This program is installed once per document. Hot snapshot/action calls below
+    // only invoke the resident functions instead of retransmitting and reparsing
+    // the whole semantic runtime on every agent turn.
     private static final String CORE = """
         const __tempera = (() => {
           const MAX_NODES = %d;
@@ -190,23 +194,32 @@ final class DomProgram {
               after
             };
           };
-          return {capture, act, scroll};
+          return Object.freeze({version: 1, capture, act, scroll});
         })();
         """.formatted(MAX_NODES);
 
     private DomProgram() {}
 
+    static String install() {
+        return "(() => {"
+            + "if (!window." + GLOBAL + " || window." + GLOBAL + ".version !== 1) {"
+            + CORE
+            + "Object.defineProperty(window," + JSONObject.quote(GLOBAL)
+            + ",{value:__tempera,writable:false,enumerable:false,configurable:false});}"
+            + "return JSON.stringify({ok:true,version:window." + GLOBAL + ".version});})()";
+    }
+
     static String snapshot() {
-        return "(() => {" + CORE + "return JSON.stringify(__tempera.capture());})()";
+        return "(() => JSON.stringify(window." + GLOBAL + ".capture()))()";
     }
 
     static String action(JSONObject request) {
-        return "(() => {" + CORE + "const request=JSON.parse(" + JSONObject.quote(request.toString())
-            + ");return JSON.stringify(__tempera.act(request));})()";
+        return "(() => {const request=JSON.parse(" + JSONObject.quote(request.toString())
+            + ");return JSON.stringify(window." + GLOBAL + ".act(request));})()";
     }
 
     static String scroll(JSONObject request) {
-        return "(() => {" + CORE + "const request=JSON.parse(" + JSONObject.quote(request.toString())
-            + ");return JSON.stringify(__tempera.scroll(request));})()";
+        return "(() => {const request=JSON.parse(" + JSONObject.quote(request.toString())
+            + ");return JSON.stringify(window." + GLOBAL + ".scroll(request));})()";
     }
 }
