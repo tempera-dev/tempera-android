@@ -24,43 +24,39 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/runtime-efficiency
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
       - name: Add persistent bridge channel
         shell: python
         run: |
           from pathlib import Path
+
           path = Path('cli/src/bridge.rs')
           text = path.read_text()
-          if 'connection: Option<BufReader<TcpStream>>' not in text:
-              old = '''    client_id: String,
-                  server_epoch: Option<String>,
-                  adb: AdbBackend,
-              }'''
-              new = '''    client_id: String,
-                  server_epoch: Option<String>,
-                  adb: AdbBackend,
-                  connection: Option<BufReader<TcpStream>>,
-                  sequence: u64,
-              }'''
-              if old not in text:
-                  raise SystemExit('BridgeClient field anchor missing')
-              text = text.replace(old, new, 1)
-              old = '''            server_epoch: None,
-                      adb,
-                  };'''
-              new = '''            server_epoch: None,
-                      adb,
-                      connection: None,
-                      sequence: 0,
-                  };'''
-              if old not in text:
-                  raise SystemExit('BridgeClient constructor anchor missing')
+
+          def replace_once(old, new, label):
+              global text
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected one anchor, found {text.count(old)}')
               text = text.replace(old, new, 1)
 
-              start = text.index('    fn request(&mut self, operation: &str, payload: Value, requires_epoch: bool) -> Result<Value> {')
-              end = text.index('\n    }\n}\n\n/// Translate a public action', start) + len('\n    }')
+          if 'connection: Option<BufReader<TcpStream>>' not in text:
+              replace_once(
+                  '    server_epoch: Option<String>,\n    adb: AdbBackend,\n}',
+                  '    server_epoch: Option<String>,\n    adb: AdbBackend,\n    connection: Option<BufReader<TcpStream>>,\n    sequence: u64,\n}',
+                  'BridgeClient fields',
+              )
+              replace_once(
+                  '            server_epoch: None,\n            adb,\n        };',
+                  '            server_epoch: None,\n            adb,\n            connection: None,\n            sequence: 0,\n        };',
+                  'BridgeClient constructor',
+              )
+
+              start_marker = '    fn request(&mut self, operation: &str, payload: Value, requires_epoch: bool) -> Result<Value> {'
+              end_marker = '\n    }\n}\n\n/// Translate a public action'
+              start = text.index(start_marker)
+              end = text.index(end_marker, start) + len('\n    }')
               replacement = r'''    fn request(&mut self, operation: &str, payload: Value, requires_epoch: bool) -> Result<Value> {
               self.sequence = self.sequence.wrapping_add(1);
               let request_id = format!("{}-{}", self.client_id, self.sequence);
@@ -68,13 +64,14 @@ jobs:
               match self.request_once(&request) {
                   Ok(result) => Ok(result),
                   Err(first) => {
-                      // Bridge protocol v3 caches responses by (client_id, id).
-                      // Retrying this exact serialized request is therefore
-                      // at-most-once even when the first response was lost.
+                      // Protocol v3 caches a completed response before it is written
+                      // to the socket, keyed by (client_id, request id). Replaying
+                      // the exact same request after a transport failure therefore
+                      // reconciles an ambiguous delivery without executing twice.
                       self.connection = None;
                       self.request_once(&request).map_err(|second| {
                           AndroidError::Backend(format!(
-                              "Bridge request failed after one at-most-once reconnect: first={first}; second={second}"
+                              "Bridge request failed after one same-ID reconnect: first={first}; second={second}"
                           ))
                       })
                   }
@@ -116,23 +113,37 @@ jobs:
                       "Bridge request exceeds device protocol limit".to_string(),
                   ));
               }
+
               let connection = self.connection.as_mut().expect("bridge connection established");
               connection.get_mut().write_all(&encoded)?;
               connection.get_mut().write_all(b"\n")?;
               connection.get_mut().flush()?;
-              let mut line = String::new();
-              let bytes = connection.read_line(&mut line)?;
-              if bytes == 0 {
-                  return Err(AndroidError::Backend(
-                      "Bridge closed the persistent connection before responding".to_string(),
-                  ));
+
+              let mut line = Vec::new();
+              loop {
+                  let available = connection.fill_buf()?;
+                  if available.is_empty() {
+                      return Err(AndroidError::Backend(
+                          "Bridge closed the persistent connection before responding".to_string(),
+                      ));
+                  }
+                  let take = available
+                      .iter()
+                      .position(|byte| *byte == b'\n')
+                      .map_or(available.len(), |index| index + 1);
+                  if line.len().saturating_add(take) > 4 * 1024 * 1024 {
+                      return Err(AndroidError::Backend(
+                          "Bridge response exceeds 4 MiB host limit".to_string(),
+                      ));
+                  }
+                  line.extend_from_slice(&available[..take]);
+                  connection.consume(take);
+                  if line.last() == Some(&b'\n') {
+                      break;
+                  }
               }
-              if line.len() > 4 * 1024 * 1024 {
-                  return Err(AndroidError::Backend(
-                      "Bridge response exceeds 4 MiB host limit".to_string(),
-                  ));
-              }
-              let response: Value = serde_json::from_str(&line)?;
+
+              let response: Value = serde_json::from_slice(&line)?;
               if response.get("ok").and_then(Value::as_bool) != Some(true) {
                   return Err(AndroidError::Backend(
                       response
@@ -163,13 +174,28 @@ jobs:
               Ok(())
           }'''
               text = text[:start] + replacement + text[end:]
+
+              drop_old = '''impl Drop for BridgeClient {
+              fn drop(&mut self) {
+                  let _ = self.adb.remove_forward(self.host_port);
+              }
+          }'''
+              drop_new = '''impl Drop for BridgeClient {
+              fn drop(&mut self) {
+                  self.connection = None;
+                  let _ = self.adb.remove_forward(self.host_port);
+              }
+          }'''
+              if drop_old in text:
+                  text = text.replace(drop_old, drop_new, 1)
+
               path.write_text(text)
       - name: Format and validate
         run: |
           cargo fmt --all
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
-          cargo build --workspace --release
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+          cargo build --locked --workspace --release
       - name: Commit validated persistent bridge
         shell: bash
         run: |
