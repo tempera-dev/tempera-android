@@ -6,10 +6,26 @@ package="dev.tempera.android.browser"
 activity="dev.tempera.android.browser.TemperaBrowserActivity"
 port=7433
 
+cleanup() {
+  adb forward --remove "tcp:$port" >/dev/null 2>&1 || true
+  adb shell am force-stop "$package" >/dev/null 2>&1 || true
+}
+
+diagnostics() {
+  echo '--- Android browser control diagnostics ---' >&2
+  adb forward --list >&2 || true
+  adb shell dumpsys activity activities | grep -A8 -B2 "$package" >&2 || true
+  adb logcat -d -v brief TemperaBrowser:D AndroidRuntime:E '*:S' >&2 || true
+}
+
+trap cleanup EXIT
+
 [[ -f "$apk" ]]
 adb install -r "$apk" >/dev/null
 adb shell am force-stop "$package"
-adb shell am start -n "$package/$activity" >/dev/null
+adb logcat -c || true
+adb shell am start -W -n "$package/$activity" >/dev/null
+adb forward --remove "tcp:$port" >/dev/null 2>&1 || true
 adb forward "tcp:$port" "tcp:$port" >/dev/null
 
 browser_token=""
@@ -20,33 +36,49 @@ for _ in $(seq 1 60); do
   fi
   sleep 0.25
 done
-[[ "$browser_token" =~ ^[0-9a-f]{64}$ ]]
+if [[ ! "$browser_token" =~ ^[0-9a-f]{64}$ ]]; then
+  diagnostics
+  echo 'browser control token was not created' >&2
+  exit 1
+fi
 
 request() {
   local method="$1"
   local path="$2"
   local body="${3:-}"
+  local common=(
+    --fail
+    --silent
+    --show-error
+    --http1.1
+    --connect-timeout 2
+    --max-time 8
+    --request "$method"
+    --header "Authorization: Bearer $browser_token"
+  )
   if [[ -n "$body" ]]; then
-    curl --fail --silent --show-error \
-      --request "$method" \
-      --header "Authorization: Bearer $browser_token" \
+    curl "${common[@]}" \
       --header 'Content-Type: application/json' \
       --data "$body" \
       "http://127.0.0.1:$port$path"
   else
-    curl --fail --silent --show-error \
-      --request "$method" \
-      --header "Authorization: Bearer $browser_token" \
-      "http://127.0.0.1:$port$path"
+    curl "${common[@]}" "http://127.0.0.1:$port$path"
   fi
 }
 
+health_ok=0
 for _ in $(seq 1 40); do
-  if request GET /v1/health > /tmp/tempera-browser-health.json 2>/dev/null; then
+  if request GET /v1/health > /tmp/tempera-browser-health.json 2>/tmp/tempera-browser-health.err; then
+    health_ok=1
     break
   fi
   sleep 0.25
 done
+if [[ "$health_ok" -ne 1 ]]; then
+  cat /tmp/tempera-browser-health.err >&2 || true
+  diagnostics
+  exit 1
+fi
 jq -e '.ok == true and .primaryTransport == "instrumented-webview-dom"' \
   /tmp/tempera-browser-health.json >/dev/null
 
@@ -105,6 +137,3 @@ result = {
 }
 print(json.dumps(result, sort_keys=True))
 PY
-
-adb shell am force-stop "$package"
-adb forward --remove "tcp:$port" >/dev/null
