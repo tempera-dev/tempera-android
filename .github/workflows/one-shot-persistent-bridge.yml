@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - agent/runtime-efficiency
+  pull_request:
+    branches:
+      - agent/android-computer-use
+    paths:
+      - "cli/src/bridge.rs"
+      - "docs/PERSISTENT_BRIDGE_VALIDATION.md"
+      - ".github/workflows/one-shot-persistent-bridge.yml"
 
 permissions:
   contents: write
