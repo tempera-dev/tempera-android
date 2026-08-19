@@ -6,9 +6,9 @@ final class DomProgram {
     private static final int MAX_NODES = 600;
     private static final String GLOBAL = "__temperaAgentRuntimeV1";
 
-    // This program is installed once per document. Hot snapshot/action calls below
-    // only invoke the resident functions instead of retransmitting and reparsing
-    // the whole semantic runtime on every agent turn.
+    // Installed once per document. The resident runtime maintains a mutation-
+    // driven semantic cache and stable per-element references so unchanged
+    // snapshots avoid a full DOM/style scan.
     private static final String CORE = """
         const __tempera = (() => {
           const MAX_NODES = %d;
@@ -17,11 +17,18 @@ final class DomProgram {
             '[role]', '[tabindex]', '[contenteditable="true"]',
             'summary', 'label', 'video[controls]', 'audio[controls]'
           ].join(',');
+          const refs = new WeakMap();
+          const elementsByRef = new Map();
+          let nextRef = 1;
+          let dirty = true;
+          let cached = null;
+          let generation = 0;
 
+          const markDirty = () => { dirty = true; generation += 1; };
           const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
           const lower = value => normalize(value).toLowerCase();
           const visible = element => {
-            if (!(element instanceof Element)) return false;
+            if (!(element instanceof Element) || !element.isConnected) return false;
             const style = getComputedStyle(element);
             if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
             const rect = element.getBoundingClientRect();
@@ -81,16 +88,30 @@ final class DomProgram {
             }
             return hash.toString(16).padStart(16, '0');
           };
-          const elements = () => Array.from(document.querySelectorAll(selector)).filter(visible).slice(0, MAX_NODES);
-          const capture = () => {
-            const raw = elements();
-            const nodes = raw.map((element, index) => {
+          const referenceFor = element => {
+            let ref = refs.get(element);
+            if (!ref) {
+              ref = '@d' + nextRef++;
+              refs.set(element, ref);
+            }
+            return ref;
+          };
+          const semanticElements = () => Array.from(document.querySelectorAll(selector))
+            .filter(visible)
+            .slice(0, MAX_NODES);
+          const captureFresh = () => {
+            const raw = semanticElements();
+            const activeRefs = new Set();
+            const nodes = raw.map(element => {
+              const ref = referenceFor(element);
+              activeRefs.add(ref);
+              elementsByRef.set(ref, element);
               const rect = element.getBoundingClientRect();
               const role = roleOf(element);
               const sensitive = isSensitive(element);
               const value = sensitive ? '' : normalize(element.value || '');
               return {
-                ref: '@d' + (index + 1),
+                ref,
                 role,
                 label: labelOf(element),
                 value: value.slice(0, 240),
@@ -101,13 +122,16 @@ final class DomProgram {
                 bounds: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)]
               };
             });
+            for (const ref of elementsByRef.keys()) {
+              if (!activeRefs.has(ref)) elementsByRef.delete(ref);
+            }
             const canonical = JSON.stringify({
               url: location.href,
               title: document.title,
               viewport: [innerWidth, innerHeight, devicePixelRatio],
-              nodes: nodes.map(node => [node.role,node.label,node.value,node.disabled,node.checked,node.selected,node.sensitive,node.bounds])
+              nodes: nodes.map(node => [node.ref,node.role,node.label,node.value,node.disabled,node.checked,node.selected,node.sensitive,node.bounds])
             });
-            return {
+            cached = {
               schemaVersion: 'tempera.android.browser.snapshot/v1',
               url: location.href,
               title: document.title,
@@ -115,8 +139,16 @@ final class DomProgram {
               viewport: {width: innerWidth, height: innerHeight, scale: devicePixelRatio},
               nodes,
               truncated: raw.length >= MAX_NODES,
-              trustedForConsequentialActions: false
+              trustedForConsequentialActions: false,
+              semanticGeneration: generation,
+              semanticCacheHit: false
             };
+            dirty = false;
+            return cached;
+          };
+          const capture = () => {
+            if (dirty || !cached) return captureFresh();
+            return {...cached, semanticCacheHit: true};
           };
           const setValue = (element, value) => {
             const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -126,18 +158,21 @@ final class DomProgram {
             element.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: value}));
             element.dispatchEvent(new Event('change', {bubbles: true}));
           };
+          const resolve = ref => {
+            const element = elementsByRef.get(String(ref || ''));
+            return element && element.isConnected && visible(element) ? element : null;
+          };
           const act = request => {
             const before = capture();
             if (!request.expectedStateHash || request.expectedStateHash !== before.documentStateHash) {
               return {ok: false, stale: true, error: 'document state changed', before};
             }
-            const match = /^@d([1-9][0-9]*)$/.exec(String(request.ref || ''));
-            if (!match) return {ok: false, stale: false, error: 'invalid or missing DOM ref', before};
-            const list = elements();
-            const index = Number(match[1]) - 1;
-            const element = list[index];
+            const ref = String(request.ref || '');
+            if (!/^@d[1-9][0-9]*$/.test(ref)) return {ok: false, stale: false, error: 'invalid or missing DOM ref', before};
+            const element = resolve(ref);
             if (!element) return {ok: false, stale: true, error: 'DOM ref expired', before};
             const kind = String(request.kind || 'tap');
+            markDirty();
             if (kind === 'tap' || kind === 'click') {
               element.focus({preventScroll: true});
               element.click();
@@ -156,17 +191,17 @@ final class DomProgram {
             } else {
               return {ok: false, stale: false, error: 'unsupported DOM action: ' + kind, before};
             }
-            const after = capture();
+            const after = captureFresh();
             return {
               ok: true,
               stale: false,
               receipt: {
                 schemaVersion: 'tempera.android.browser.action-receipt/v1',
                 kind,
-                ref: request.ref,
+                ref,
                 beforeStateHash: before.documentStateHash,
                 afterStateHash: after.documentStateHash,
-                sensitiveTarget: Boolean(before.nodes[index] && before.nodes[index].sensitive)
+                sensitiveTarget: Boolean(before.nodes.find(node => node.ref === ref)?.sensitive)
               },
               after
             };
@@ -180,8 +215,9 @@ final class DomProgram {
             const amount = Math.max(64, Math.round(innerHeight * 0.72));
             const dx = direction === 'left' ? -amount : direction === 'right' ? amount : 0;
             const dy = direction === 'up' ? -amount : direction === 'down' ? amount : 0;
+            markDirty();
             scrollBy({left: dx, top: dy, behavior: 'instant'});
-            const after = capture();
+            const after = captureFresh();
             return {
               ok: true,
               stale: false,
@@ -194,7 +230,28 @@ final class DomProgram {
               after
             };
           };
-          return Object.freeze({version: 1, capture, act, scroll});
+
+          const observer = new MutationObserver(markDirty);
+          const observeRoot = () => {
+            if (document.documentElement) {
+              observer.observe(document.documentElement, {
+                subtree: true,
+                childList: true,
+                attributes: true,
+                characterData: true
+              });
+            }
+          };
+          observeRoot();
+          addEventListener('input', markDirty, true);
+          addEventListener('change', markDirty, true);
+          addEventListener('scroll', markDirty, true);
+          addEventListener('resize', markDirty, true);
+          if (typeof ResizeObserver !== 'undefined' && document.documentElement) {
+            new ResizeObserver(markDirty).observe(document.documentElement);
+          }
+
+          return Object.freeze({version: 1, capture, act, scroll, markDirty});
         })();
         """.formatted(MAX_NODES);
 
