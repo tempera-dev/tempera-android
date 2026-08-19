@@ -50,7 +50,13 @@ final class ControlServer implements Closeable {
         }
         server = new ServerSocket();
         server.setReuseAddress(true);
-        server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), PORT), 16);
+        // adb's tcp forward targets the device IPv4 loopback endpoint. Avoid
+        // InetAddress.getLoopbackAddress(), which may select ::1 on Android
+        // and leave the forwarded IPv4 connection with no listening peer.
+        server.bind(
+            new InetSocketAddress(InetAddress.getByAddress(new byte[]{127, 0, 0, 1}), PORT),
+            16
+        );
         acceptThread = new Thread(this::acceptLoop, "tempera-browser-control-accept");
         acceptThread.setDaemon(true);
         acceptThread.start();
@@ -82,6 +88,9 @@ final class ControlServer implements Closeable {
                 final Request request;
                 try {
                     request = readRequest(input);
+                } catch (IllegalArgumentException error) {
+                    write(output, 400, error(error.getMessage()), false);
+                    return;
                 } catch (IOException error) {
                     // Normal peer close or idle expiry. The request is either absent or
                     // incomplete, so never attempt to replay or synthesize a mutation.
@@ -96,17 +105,26 @@ final class ControlServer implements Closeable {
                 boolean requestedClose = "close".equalsIgnoreCase(request.headers.get("connection"));
                 boolean keepAlive = !requestedClose
                     && requestIndex + 1 < MAX_REQUESTS_PER_CONNECTION;
-                JSONObject response = route(request);
+                final JSONObject response;
+                try {
+                    response = route(request);
+                } catch (IllegalArgumentException error) {
+                    write(output, 400, error(error.getMessage()), false);
+                    return;
+                } catch (Exception error) {
+                    android.util.Log.e("TemperaBrowser", "control request failed", error);
+                    write(output, 500, error("browser control request failed"), false);
+                    return;
+                }
                 write(output, 200, response, keepAlive);
                 if (!keepAlive) {
                     return;
                 }
             }
-        } catch (IllegalArgumentException error) {
-            safeWrite(socket, 400, error(error.getMessage()));
-        } catch (Exception error) {
-            android.util.Log.e("TemperaBrowser", "control request failed", error);
-            safeWrite(socket, 500, error("browser control request failed"));
+        } catch (IOException error) {
+            if (running.get()) {
+                android.util.Log.d("TemperaBrowser", "control connection ended", error);
+            }
         }
     }
 
@@ -170,11 +188,24 @@ final class ControlServer implements Closeable {
         if (contentLength < 0 || contentLength > MAX_BODY) {
             throw new IllegalArgumentException("request body exceeds limit");
         }
-        byte[] body = input.readNBytes(contentLength);
-        if (body.length != contentLength) {
-            throw new IllegalArgumentException("truncated request body");
-        }
+        byte[] body = readExactBody(input, contentLength);
         return new Request(method, path, headers, body);
+    }
+
+    private byte[] readExactBody(BufferedInputStream input, int length) throws IOException {
+        byte[] body = new byte[length];
+        int offset = 0;
+        while (offset < length) {
+            int read = input.read(body, offset, length - offset);
+            if (read < 0) {
+                throw new IllegalArgumentException("truncated request body");
+            }
+            if (read == 0) {
+                continue;
+            }
+            offset += read;
+        }
+        return body;
     }
 
     private String readLine(BufferedInputStream input) throws IOException {
@@ -220,16 +251,6 @@ final class ControlServer implements Closeable {
         output.write(headers.getBytes(StandardCharsets.US_ASCII));
         output.write(payload);
         output.flush();
-    }
-
-    private void safeWrite(Socket socket, int status, JSONObject body) {
-        try {
-            if (!socket.isClosed()) {
-                write(socket.getOutputStream(), status, body, false);
-            }
-        } catch (IOException ignored) {
-            // The peer may already be gone; never retry a control request.
-        }
     }
 
     private static JSONObject error(String message) {
