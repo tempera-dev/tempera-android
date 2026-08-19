@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tempera.dev/contracts/android/mobile-gauntlet-device-plan.schema.json",
+  "title": "Tempera Android mobile gauntlet device run plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "suite",
+    "caseId",
+    "seed",
+    "task",
+    "serial",
+    "targetKind",
+    "transport",
+    "maxSteps",
+    "approveSensitive",
+    "networkPolicy",
+    "fixtureClass",
+    "fixtures",
+    "setup",
+    "bindings"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "tempera.android.mobile-gauntlet-plan/v1"},
+    "runId": {"type": "string", "pattern": "^[a-zA-Z0-9._-]{1,128}$"},
+    "suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.-]+)?$"}
+      }
+    },
+    "caseId": {"type": "string", "minLength": 1, "maxLength": 256},
+    "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+    "task": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "serial": {"type": "string", "pattern": "^emulator-[0-9]+$"},
+    "targetKind": {"const": "emulator"},
+    "transport": {"enum": ["auto", "adb", "bridge"]},
+    "model": {"type": "string", "minLength": 1, "maxLength": 256},
+    "maxSteps": {"type": "integer", "minimum": 1, "maximum": 256},
+    "approveSensitive": {"type": "boolean"},
+    "networkPolicy": {"const": "deny"},
+    "fixtureClass": {"const": "disposable-synthetic"},
+    "fixtures": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["package", "apkPath", "apkSha256"],
+        "properties": {
+          "package": {"type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)+$"},
+          "apkPath": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "apkSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clearPackages", "orientation"],
+      "properties": {
+        "clearPackages": {"type": "array", "uniqueItems": true, "items": {"type": "string"}, "maxItems": 32},
+        "orientation": {"enum": ["portrait", "landscape"]},
+        "launchPackage": {"type": "string"},
+        "launchUri": {"type": "string", "pattern": "^tempera-fixture://"},
+        "settleMs": {"type": "integer", "minimum": 0, "maximum": 10000}
+      },
+      "oneOf": [
+        {"required": ["launchPackage"]},
+        {"required": ["launchUri"]}
+      ]
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gymSourceRevision", "gymAdapterDigest", "evalSuiteDigest", "perturbationDigest"],
+      "properties": {
+        "gymSourceRevision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "gymAdapterDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "evalSuiteDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "perturbationDigest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}
