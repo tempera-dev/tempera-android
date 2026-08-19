@@ -150,6 +150,21 @@ final class DomProgram {
             if (dirty || !cached) return captureFresh();
             return {...cached, semanticCacheHit: true};
           };
+          const captureDelta = previousStateHash => {
+            const snapshot = capture();
+            if (previousStateHash && snapshot.documentStateHash === previousStateHash) {
+              return {
+                schemaVersion: 'tempera.android.browser.snapshot-delta/v1',
+                unchanged: true,
+                documentStateHash: snapshot.documentStateHash,
+                url: snapshot.url,
+                title: snapshot.title,
+                semanticGeneration: snapshot.semanticGeneration,
+                semanticCacheHit: snapshot.semanticCacheHit
+              };
+            }
+            return {...snapshot, unchanged: false};
+          };
           const setValue = (element, value) => {
             const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
             const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
@@ -251,7 +266,7 @@ final class DomProgram {
             new ResizeObserver(markDirty).observe(document.documentElement);
           }
 
-          return Object.freeze({version: 1, capture, act, scroll, markDirty});
+          return Object.freeze({version: 1, capture, captureDelta, act, scroll, markDirty});
         })();
         """.formatted(MAX_NODES);
 
@@ -268,6 +283,12 @@ final class DomProgram {
 
     static String snapshot() {
         return "(() => JSON.stringify(window." + GLOBAL + ".capture()))()";
+    }
+
+    static String snapshotDelta(String previousStateHash) {
+        return "(() => JSON.stringify(window." + GLOBAL + ".captureDelta("
+            + JSONObject.quote(previousStateHash == null ? "" : previousStateHash)
+            + ")))()";
     }
 
     static String action(JSONObject request) {
