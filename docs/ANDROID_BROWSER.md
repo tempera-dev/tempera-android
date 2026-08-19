@@ -1,27 +1,69 @@
 # Tempera Android Browser
 
-`tempera-android-browser` is the browser-specific execution surface for Chrome-compatible browsers on Android. It is not a second general Android orchestrator and it does not duplicate cross-surface planning from `tempera-use`.
+Tempera Android now has two intentionally separate browser execution surfaces:
 
-## Architecture
+- `tempera-android-dom-browser`: the dedicated, instrumented `dev.tempera.android.browser` WebView runtime. This is the lowest-latency semantic path for agent-owned browsing.
+- `tempera-android-browser`: compatibility control for Chrome-compatible Android browsers through Tempera Android Accessibility/ADB, with bounded CDP target discovery for diagnostics.
+
+Neither surface owns cross-device planning. `tempera-use` / Tempera Browser remains responsible for cross-surface planning, approvals, handoff, replay, and evaluation.
+
+## Fast-path architecture
 
 ```text
 Tempera Browser / tempera-use
             |
      versioned command
             |
-  tempera-android-browser
-      |             |
-      |             +-- temporary read-only CDP target discovery
-      |
-      +-- native Accessibility bridge (preferred)
-      +-- ADB/UIAutomator fallback
+  tempera-android-dom-browser serve
             |
-      Chrome on Android
+    one long-lived host process
+            |
+       one ADB forward
+            |
+   one authenticated HTTP/1.1
+        keep-alive channel
+            |
+ dev.tempera.android.browser
+            |
+  resident DOM semantic runtime
+      |              |
+ mutation cache    stable @d refs
+      |              |
+ snapshot delta   fused act-observe
 ```
 
-The native semantic path remains authoritative for actions. CDP target discovery is an optional diagnostic and future DOM-acceleration seam; arbitrary JavaScript is not exposed by the browser CLI.
+The dedicated browser app binds its control server only to Android loopback. The host reads an app-private bearer token with `run-as`, forwards one loopback port through ADB, and authenticates every request. The server bounds header lines, header count, body size, idle duration, client threads, and requests per connection.
 
-## Commands
+The host keeps the forward and TCP channel alive. Read-only requests may reconnect once after transport failure; mutating requests are never automatically replayed after delivery becomes ambiguous.
+
+## Dedicated browser commands
+
+```bash
+tempera-android-dom-browser health
+tempera-android-dom-browser open https://example.com
+tempera-android-dom-browser snapshot
+tempera-android-dom-browser snapshot-delta --previous-state-hash fnv1a64:...
+```
+
+For a resident agent loop, use:
+
+```bash
+tempera-android-dom-browser serve
+```
+
+and send one JSON object per line. The resident process avoids repeated CLI startup, ADB-forward creation, bearer-token lookup, and TCP setup.
+
+A mutating DOM action requires the latest document state hash and a stable `@dN` reference. The normal hot path is fused action plus observation:
+
+```text
+snapshot/delta -> plan -> guarded action -> resulting snapshot
+```
+
+The DOM runtime is installed once per document, then hot calls invoke small resident functions. A MutationObserver plus input/change/scroll/resize invalidation keeps a cached semantic tree. Stable references are attached per element rather than re-numbered from scratch on every clean snapshot. When the previous state hash still matches, the delta endpoint omits the node array entirely.
+
+DOM evidence is explicitly not trusted by itself for consequential actions. Password and payment/autocomplete values are suppressed from semantic snapshots. Cross-surface verification can still use Tempera Android Accessibility or visual evidence when required.
+
+## Chrome compatibility surface
 
 ```bash
 tempera-android-browser doctor
@@ -30,70 +72,32 @@ tempera-android-browser snapshot
 tempera-android-browser targets
 ```
 
-A snapshot returns compact browser nodes plus the underlying Android snapshot, revision, and state hash. Mutating commands require both guards from the latest snapshot:
+Stable Chrome defaults to `com.android.chrome`; another Chrome-compatible package can be selected explicitly. Accessibility actions retain revision/state-hash guards and the native bridge's fused `act_observe` path, with ADB/UIAutomator as an independent fallback.
 
-```bash
-tempera-android-browser tap @e7 \
-  --expected-revision 12 \
-  --expected-state-hash sha256:...
-```
-
-The result includes the action receipt and the next semantic snapshot in one process invocation:
-
-```text
-observe -> plan -> guarded action -> observe -> receipt
-```
-
-This removes a second CLI startup from the normal agent loop. The native bridge itself already supports fused `act_observe`; the Android browser surface is designed to consume that path while retaining the independent ADB fallback.
-
-## Browser packages
-
-Stable Chrome is the default:
-
-```text
-com.android.chrome
-```
-
-Other Chrome-compatible Android packages can be selected explicitly:
-
-```bash
-tempera-android-browser --package org.chromium.chrome snapshot
-```
-
-Package identifiers and DevTools socket names are validated before they reach ADB.
+`targets` temporarily forwards an Android localabstract DevTools socket and reads target metadata only. The forward is removed on success and error. The compatibility CLI does not grant arbitrary JavaScript authority.
 
 ## Navigation safety
 
-`open` accepts only bounded HTTP(S) URLs. It rejects embedded credentials, whitespace, control characters, and non-web schemes. Navigation is performed with an Android VIEW intent scoped to the selected browser package.
+The dedicated browser accepts bounded HTTPS URLs plus `about:blank`. Its WebView disables file/content access, rejects mixed content, requires user gestures for media, disables third-party cookies, and keeps WebView debugging disabled.
 
-Browser mutations still pass through Tempera's canonical revision guards, stale-state rejection, sensitive-action approval policy, secret redaction, and action receipts. The Android browser surface does not gain raw shell authority.
-
-## Chrome DevTools targets
-
-`targets` temporarily forwards the Android loopback socket and reads `/json/list`. The forward is removed on success and on every error path.
-
-The default socket is:
-
-```text
-chrome_devtools_remote
-```
-
-A debuggable WebView may expose a package-specific localabstract socket. WebView debugging must be enabled by the application owner; Tempera does not turn it on or weaken Android's authorization boundary.
+The Chrome compatibility surface validates package identifiers, socket names, and browser URLs before they reach ADB.
 
 ## Benchmarks
 
+The dedicated host records distributions rather than one sample:
+
 ```bash
-tempera-android-browser bench --iterations 100
+tempera-android-dom-browser bench --iterations 100
 ```
 
-The command reports min, mean, p95, and max semantic-observation time for the exact target and transport. Compare transports on the same device, page, thermal state, and build. Keep raw samples and do not convert one machine's result into a general multiplier claim.
+Record p50, p95, p99, max, mean, payload bytes, target/device, page, thermal state, build SHA, and verifier success. Compare full snapshots, unchanged deltas, fused action-observe, Accessibility bridge, and ADB fallback on the same target. Do not publish a speed multiplier until equivalent-success benchmark artifacts exist.
 
 ## Product boundary
 
-- `tempera-android-browser`: Android Chrome execution and evidence.
-- `tempera-android`: device, app, session, safety, and transport substrate.
-- `Tempo` / desktop browser executor: desktop web execution.
-- `tempera-use`: cross-surface planning, policy, approvals, handoff, replay, and benchmarks.
-- Future Tempera Browser: operator-facing desktop product shell.
+- `tempera-android-dom-browser`: fastest dedicated Android web execution surface.
+- `tempera-android-browser`: Chrome-compatible browser control and fallback.
+- `tempera-android`: device/app/session/safety/transport substrate.
+- desktop browser executor: desktop web execution.
+- `tempera-use` / Tempera Browser: cross-surface planner, policy, approvals, evidence, and benchmarks.
 
-The Android browser and desktop browser communicate through the shared versioned orchestration contract, not by importing each other's runtime code.
+The desktop and Android browser engines integrate through versioned contracts rather than importing each other's runtime implementation.
